@@ -43,6 +43,10 @@ log = logging.getLogger("predict")
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data"
 MODELS_DIR = PROJECT_ROOT / "models"
+# The frozen legacy bundle in models/ was fitted on 30 features and a
+# pre-1.5 fill format, so it cannot serve predictions with this code.
+# The corrected pipeline writes here (see README "Artifact layout").
+DEFAULT_MODELS_DIR = PROJECT_ROOT / "models" / "v2"
 
 
 def build_placeholder_rows(raw: pd.DataFrame, year: int, rnd: int,
@@ -88,7 +92,7 @@ def roster_from_session(year: int, rnd: int, session: str = "Q") -> pd.DataFrame
 def predict(year: int, rnd: int,
             grid_snapshot: grid_module.GridSnapshot | None = None,
             roster: pd.DataFrame | None = None,
-            models_dir: Path = MODELS_DIR) -> pd.DataFrame:
+            models_dir: Path = DEFAULT_MODELS_DIR) -> pd.DataFrame:
     import fastf1
     fastf1.Cache.enable_cache(str(PROJECT_ROOT / "cache"))
 
@@ -146,10 +150,36 @@ def predict(year: int, rnd: int,
     combined.loc[target_mask, "pit_start"] = (
         combined.loc[target_mask, "driver"].map(positions["pit_start"]).to_numpy())
 
+    # Score with the bundle's OWN feature list, not the live FEATURE_COLS.
+    # Importing the live list would silently serve a model on a feature set it
+    # was not fitted on whenever columns.py changes -- the same drift that broke
+    # src.baseline when increment 1.4 shrank the list from 30 to 22.
+    bundle_features = json.loads((models_dir / "feature_cols.json").read_text())
+    if bundle_features != FEATURE_COLS:
+        raise ValueError(
+            f"{models_dir} was trained on {len(bundle_features)} features, but "
+            f"columns.FEATURE_COLS now has {len(FEATURE_COLS)}. Serving it would "
+            f"mean scoring a model on inputs it never saw.\n"
+            f"  only in bundle: {sorted(set(bundle_features) - set(FEATURE_COLS))}\n"
+            f"  only in code  : {sorted(set(FEATURE_COLS) - set(bundle_features))}\n"
+            f"Retrain into this directory, or point --models-dir at a current bundle.")
+
     # The SAME fitted policy the model was trained with, replayed exactly --
     # including the driver-prior fallback the old serving path skipped, which
     # gave 2091 cells a different value here than in training.
-    policy = FillPolicy.from_json(models_dir / "fill_values.json")
+    try:
+        policy = FillPolicy.from_json(models_dir / "fill_values.json")
+    except (ValueError, TypeError) as exc:
+        raise ValueError(
+            f"Cannot load the imputation policy from {models_dir}: {exc}\n"
+            f"Bundles written before increment 1.5 store a flat dict of fill "
+            f"values and cannot be served by this code. Rebuild with:\n"
+            f"  python -m src.build_features --out-dir data/v2\n"
+            f"  python -m src.train      --features data/v2/features.parquet "
+            f"--models-dir {models_dir}\n"
+            f"  python -m src.train_rank --features data/v2/features.parquet "
+            f"--models-dir {models_dir}") from exc
+
     combined = policy.transform(combined)
     assert_no_missing(combined.loc[target_mask], FEATURE_COLS)
 
@@ -229,8 +259,10 @@ def main():
     ap.add_argument("--cutoff", type=str, default=None,
                     help="forecast cutoff in UTC, recorded with the output "
                          "(e.g. 2026-08-01T13:00:00Z)")
-    ap.add_argument("--models-dir", type=Path, default=MODELS_DIR,
-                    help="model bundle directory (default: models/)")
+    ap.add_argument("--models-dir", type=Path, default=DEFAULT_MODELS_DIR,
+                    help="model bundle directory (default: models/v2, the "
+                         "corrected pipeline). models/ holds the frozen "
+                         "legacy bundle and cannot be served by this code.")
     ap.add_argument("--from-quali", action="store_true",
                     help="take the entry list and a PROVISIONAL grid from the "
                          "target round's qualifying session (must have run). "
@@ -255,7 +287,10 @@ def main():
     except grid_module.GridError as exc:
         raise SystemExit(f"GRID ERROR: {exc}")
 
-    out = predict(args.year, args.round, snapshot, roster, args.models_dir)
+    try:
+        out = predict(args.year, args.round, snapshot, roster, args.models_dir)
+    except (ValueError, FileNotFoundError) as exc:
+        raise SystemExit(f"\nCANNOT PREDICT: {exc}")
     record = out.attrs["grid"]
 
     print(f"\nGrid status : {record['status'].upper()}  "
