@@ -7,7 +7,7 @@ Claude session and it should be able to continue without re-reading everything.
 any milestone lands. Keep it current, not comprehensive — detail lives in
 `REASONING.md` and `FIX_PLAN.md`.
 
-**Last updated:** 2026-09-11 — session 1 (increments 0.1, 1.1, 1.2, 1.3 done)
+**Last updated:** 2026-09-11 — session 1 (increments 0.1, 1.1-1.4 done)
 
 ---
 
@@ -127,7 +127,7 @@ fitted imputation state, or serving parity.
 | # | Milestone | Status |
 | --- | --- | --- |
 | 0 | Preserve & reproduce: baseline.json, manifest, dep lock, README refresh | **0.1 DONE** (README refresh deferred to M1) |
-| 1 | Correct contracts & replay: weather, fitted state, labels, shared as-of path, deterministic ties | **1.1-1.3 DONE** (labels, metrics, determinism, relevance); weather / fitted state / one-path pending |
+| 1 | Correct contracts & replay: weather, fitted state, labels, shared as-of path, deterministic ties | **1.1-1.4 DONE** (labels, metrics, determinism, relevance, weather); fitted state / one-path pending |
 | 2 | Evaluation harness: `backtest.py`, `metrics.py`, real winner gates | NOT STARTED |
 | 3 | Qualifying & car features: `qualifying.py`, `ratings.py` | NOT STARTED |
 | 4 | Model comparison M0-M4 (+ Plackett-Luce, winner/podium heads) | NOT STARTED |
@@ -141,9 +141,11 @@ it. No feature or model work before both land.
 
 ## 6. Standing decisions
 
-- Fix correctness before chasing accuracy. Metrics are **expected to get worse**
-  after P0 fixes, because today's numbers lean on information unavailable at
-  prediction time. That is the correct outcome, not a regression.
+- Fix correctness before chasing accuracy. A metric drop after a P0 fix is an
+  acceptable outcome, not a regression - but do NOT assume one is coming.
+  Increment 1.4 removed the weather leak and test metrics IMPROVED (classifier
+  test AUC 0.7908 -> 0.8178) because the leaky features were costing more in
+  overfitting than they returned. Measure; never predict the direction.
 - No hand-coded driver exceptions, ever.
 - A transformer is an experiment, not a prerequisite. 103 race groups is far too
   little to train one from scratch. TabPFN (pretrained) is the first and only
@@ -157,69 +159,89 @@ it. No feature or model work before both land.
 
 ## 7. Current status / next action
 
-**Session 1 (2026-09-11).** Full `REASONING.md` entries carry the detail; this
-is the summary. Nothing is committed by Claude - the user runs all git commands.
+**Session 1 (2026-09-11).** `REASONING.md` carries the detail; this is the
+summary. Nothing is committed by Claude - the user runs all git commands.
 
 ### Completed increments
 
-| # | What | Effect on metrics |
+| # | What | Effect |
 | --- | --- | --- |
-| 0.1 | `src/baseline.py` -> `reports/baseline.json`; `.gitignore` rewritten so JSON provenance is trackable; `requirements.lock.txt` | none (records the starting point) |
+| 0.1 | `src/baseline.py` -> `reports/baseline.json`; `.gitignore` fixed so JSON provenance is trackable; `requirements.lock.txt` | records the starting point |
 | 1.1 | `src/labels.py` - separated `result_order` / `officially_classified` / `started` / `finished` / `status_category`; wired into `ingest.py` | none - `finished_top10` changed on 0 rows |
-| 1.2 | `src/metrics.py` - deterministic tie policy, explicit labels, split Spearman denominators, `top1_hit_rate` renamed; applied to evaluation AND to the blend/inference path | row-shuffle spread 0.0080 -> **0.0**; only tied-score methods' Spearman moved |
-| 1.3 | Ranker relevance gates on `officially_classified`; `--models-dir` on train/evaluate_rank; retrained to `models/v2/` | **none measurable** (1.8e-07 score delta, 0 position changes) |
+| 1.2 | `src/metrics.py` - deterministic tie policy, explicit labels, split Spearman denominators, `top1_hit_rate` renamed; applied to evaluation AND the blend/inference path | row-shuffle spread 0.0080 -> **0.0** |
+| 1.3 | Ranker relevance gates on `officially_classified` | none measurable (1.8e-07 score delta) |
+| 1.4 | **Removed 8 leaking weather features** (30 -> 22); rebuilt to `data/v2/`, retrained to `models/v2/` | test AUC 0.7908 -> **0.8178**; see below |
 
-Test suite: **79 tests**, `python -m pytest`. The repo had none before 1.1.
+Test suite: **87 tests**, `python -m pytest`. The repo had none before 1.1.
 
-### Corrected metrics, held-out 2026 (11 races)
+### Artifact layout (IMPORTANT)
 
-Supersedes the legacy table in section 3, which stays as the historical record.
+- `data/`, `models/` - **frozen legacy**, hashed in `reports/baseline.json`.
+  Never overwrite. `src/baseline.py` reproduces the legacy numbers from these.
+- `data/v2/`, `models/v2/` - **current corrected pipeline**. A working area, not
+  a version history; each increment rebuilds it. Replaced by the milestone 5
+  model bundle eventually.
+
+Rebuild the corrected pipeline end to end:
+
+```
+python -m src.build_features --raw data/raw_results.parquet --out-dir data/v2
+python -m src.audit_leakage  --data-dir data/v2 --n-rows 5
+python -m src.train          --features data/v2/features.parquet --models-dir models/v2
+python -m src.train_rank     --features data/v2/features.parquet --models-dir models/v2
+python -m src.blend_rank     --features data/v2/features.parquet --models-dir models/v2 --write
+```
+
+### Corrected metrics, held-out 2026 (11 races, alpha=0.5)
 
 | Method | Winner | Podium | Top-10 | Spearman (all) | Spearman (finishers) |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | grid_baseline | 0.7273 | 0.5758 | 0.7364 | 0.6432 | 0.8450 |
-| top10_classifier | 0.2727 | 0.4848 | 0.7545 | 0.5672 | 0.7852 |
-| rank_model | 0.5455 | 0.5758 | 0.6909 | 0.5329 | 0.7179 |
-| blend (a=0.6) | 0.7273 | 0.5758 | 0.7455 | 0.6416 | 0.8400 |
+| top10_classifier | 0.1818 | 0.4545 | 0.7636 | 0.5955 | 0.8007 |
+| rank_model | 0.5455 | 0.6061 | 0.7273 | 0.5394 | 0.7588 |
+| blend (a=0.5) | 0.7273 | 0.5758 | 0.7545 | 0.6240 | 0.8292 |
 
-**The headline problem is unchanged:** the blend still picks exactly the grid's
-winners. Nothing so far was expected to change that - 1.1-1.3 were correctness
-fixes. The leakage fixes (1.4-1.5) come next and are expected to move numbers
-DOWN.
+**The headline problem is unchanged: the blend still picks exactly the grid's
+winners (8/11).** No increment so far was aimed at that - 1.1-1.4 were
+correctness work.
 
-Caveat worth repeating: `rank_model`'s Spearman rose 0.5005 -> 0.5329 with no
-model improvement. 32% of its test rows (77 of 242) are tied, and the tie-break
-falls back to grid order, so it inherits grid performance there.
+Two caveats that must travel with these numbers:
+
+1. **11 races. One race = 9.1pp of winner accuracy.** FIX_PLAN.md section 8 is
+   explicit that this sample cannot rank candidates. Nothing here is significant.
+2. `rank_model`'s Spearman partly reflects the tie-break, not the model: 32% of
+   its rows are tied and fall back to grid order.
 
 ### Guards in place
 
-- `python -m src.baseline` compares and refuses to overwrite without `--force`.
-- `python -m src.blend_rank` needs `--write` to touch `models/blend_alpha.json`.
-- `src/baseline.py` holds private pinned copies of the pre-correction metric and
-  blend functions, so correcting those modules cannot rewrite the frozen record.
-- All artifacts hashed in `reports/baseline.json` are intact and verified.
+- `src/baseline.py` compares and refuses to overwrite without `--force`, and is
+  pinned twice over - private copies of the pre-correction metric/blend
+  functions, and the frozen `models/feature_cols.json` rather than the live
+  `FEATURE_COLS`.
+- `src/blend_rank.py` needs `--write` to save an alpha.
+- `tests/test_columns.py` fails if race-session weather re-enters `FEATURE_COLS`.
+- All artifacts hashed in `reports/baseline.json` verified intact.
 
 ### Open questions for the user
 
-1. `models/v2/` vs `models/` - v2 is the correct code path but performs
-   identically. Keep both until the milestone 5 model bundle replaces ad-hoc
-   directories, or fold v2 into `models/` now?
-2. Re-ingesting 2018-2021 needs network access (Claude has none). Worth doing
-   before the feature work in milestone 3, since it roughly triples the data.
+1. Re-ingesting 2018-2021 needs network access (Claude has none). Worth doing
+   before milestone 3, since it roughly triples the data.
+2. `README.md` is now badly stale - documents 2018+ data, synthetic-only, 30
+   features and race-condition weather. Fold the rewrite into the next
+   increment?
 
 ### Next action
 
-**Increment 1.4 - remove race-weather leakage.** The biggest remaining P0 and
-the first change expected to move metrics DOWN.
+**Increment 1.5 - fit preprocessing on training data only** (FIX_PLAN.md
+section 2, P0-2). `build_features.apply_fill_policy()` computes global means
+over the whole frame before `train.chronological_split()`, so held-out outcomes
+influence training inputs. Full-data mean finish is 10.5982 against 10.4790 on
+the training partition.
 
-- `ingest.weather_row()` averages weather over the *race session*; the six
-  resulting columns are in `FEATURE_COLS`.
-- `weather.add_weather_affinity()` selects the driver's historical temperature
-  bucket using the *target race's realized* track temp.
-- Requires rebuilding `features.parquet` (write alongside - the frozen copy is
-  hashed) and retraining both models.
-- Decide first: drop the weather columns entirely for the corrected benchmark
-  (FIX_PLAN.md section 2 P0-1 says to), or keep prior-race weather only.
+The fix needs fitted state saved with the model and replayed at inference,
+which overlaps increment 1.6 (the single shared `build_asof_features` path,
+P0-3) - the train/serve fill mismatch is the same defect seen from the serving
+side. Consider doing 1.5 and 1.6 together.
 
 ## 8. Update protocol
 

@@ -85,11 +85,11 @@ CHECKS = [
 DEBUT_NAN_FEATURES = [
     "form_avg_finish_3", "form_avg_points_3", "form_avg_quali_3",
     "form_dnf_rate_5", "season_avg_finish", "momentum",
-    "driver_overall_avg_finish", "driver_wet_delta", "driver_temp_bin_avg",
+    "driver_overall_avg_finish", "driver_wet_delta",
     "driver_circuit_avg_finish", "driver_circuit_best_finish",
     "driver_circuit_podium_rate", "driver_dnf_rate",
 ]
-DEBUT_ZERO_COUNTS = ["driver_wet_n", "driver_temp_bin_n", "driver_races_at_circuit"]
+DEBUT_ZERO_COUNTS = ["driver_wet_n", "driver_races_at_circuit"]
 CIRCUIT_NAN_FEATURES = ["driver_circuit_avg_finish", "driver_circuit_best_finish",
                         "driver_circuit_podium_rate"]
 
@@ -102,9 +102,10 @@ def _match(a, b, atol=1e-9):
     return abs(float(a) - float(b)) <= atol
 
 
-def audit(n_rows: int = 3, seed: int = 0) -> bool:
-    raw = pd.read_parquet(DATA_DIR / "raw_results.parquet")
-    pre = pd.read_parquet(DATA_DIR / "features_prefill.parquet")
+def audit(n_rows: int = 3, seed: int = 0, data_dir: Path = DATA_DIR,
+          raw_path: Path | None = None) -> bool:
+    raw = pd.read_parquet(raw_path or (DATA_DIR / "raw_results.parquet"))
+    pre = pd.read_parquet(data_dir / "features_prefill.parquet")
     raw["date"] = pd.to_datetime(raw["date"])
     pre["date"] = pd.to_datetime(pre["date"])
 
@@ -157,7 +158,7 @@ def audit(n_rows: int = 3, seed: int = 0) -> bool:
               f"non-NaN at first circuit visit: {n_bad}/{len(first_at_circuit)}")
 
     # teammate deltas at debut must be neutral (0) and flagged unavailable
-    final = pd.read_parquet(DATA_DIR / "features.parquet")
+    final = pd.read_parquet(data_dir / "features.parquet")
     final["date"] = pd.to_datetime(final["date"])
     fdebut = final.sort_values("date", kind="mergesort").groupby("driver", sort=False).head(1)
     n_bad = ((fdebut["quali_gap_to_teammate"] != 0)
@@ -179,8 +180,12 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--n-rows", type=int, default=3)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--data-dir", type=Path, default=DATA_DIR,
+                    help="directory holding features.parquet / features_prefill.parquet")
+    ap.add_argument("--raw", type=Path, default=None,
+                    help="raw_results.parquet to recompute against (default: data/)")
     args = ap.parse_args()
-    sys.exit(0 if audit(args.n_rows, args.seed) else 1)
+    sys.exit(0 if audit(args.n_rows, args.seed, args.data_dir, args.raw) else 1)
 
 
 if __name__ == "__main__":

@@ -89,6 +89,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--features", type=Path, default=DATA_DIR / "features.parquet")
     parser.add_argument("--models-dir", type=Path, default=MODELS_DIR,
                         help="where to write the ranker (default: models/). Use a "
                              "separate directory to keep a frozen model for A/B.")
@@ -97,7 +98,7 @@ def main():
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
-    df = pd.read_parquet(DATA_DIR / "features.parquet")
+    df = pd.read_parquet(args.features)
     df = add_relevance_label(df)
     train, val, test, latest = chronological_split(df)
     log.info("Split (latest season = %s): train=%s rows (<=%s), val=%s rows (%s), "
@@ -122,7 +123,8 @@ def main():
     joblib.dump(ranker, models_dir / "rank_model.joblib")
     with open(models_dir / "feature_cols.json", "w") as f:
         json.dump(FEATURE_COLS, f, indent=2)
-    shutil.copy(DATA_DIR / "fill_values.json", models_dir / "fill_values.json")
+    shutil.copy(args.features.parent / "fill_values.json",
+                models_dir / "fill_values.json")
 
     log.info("Saved rank_model.joblib -> %s", models_dir)
     print("\nNext: python -m src.evaluate_rank   (order/podium metrics vs grid baseline)")

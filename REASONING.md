@@ -571,4 +571,124 @@ can be written alongside the frozen artifacts instead of over them.
 
 ---
 
+## [006] Remove race-weather leakage from the feature matrix
+
+**Date:** 2026-09-11 - **Milestone:** 1 (increment 1.4) - **Files:**
+`src/columns.py`, `src/weather.py`, `src/build_features.py`,
+`src/audit_leakage.py`, `src/train.py`, `src/train_rank.py`,
+`src/blend_rank.py`, `src/baseline.py`, `tests/test_columns.py` (new),
+`data/v2/` + `models/v2/` (rebuilt artifacts)
+**Status:** implemented
+
+### Before
+
+`FEATURE_COLS` held 30 features, eight of which required knowledge of the race
+being predicted:
+
+- `air_temp`, `track_temp`, `humidity`, `wind_speed`, `rainfall`, `is_wet` came
+  from `ingest.weather_row()`, which averages FastF1's weather stream over the
+  **race session**.
+- `driver_temp_bin_avg` / `driver_temp_bin_n` read historical per-bucket
+  averages, but `weather.add_weather_affinity()` chose *which* bucket to read
+  from the target race's realized `track_temp`.
+
+### After
+
+22 features. The six raw readings stay in `features.parquet` as ID columns for
+auditing but can no longer reach the model; the temperature-bin block is deleted
+with its reasoning left in place. `driver_wet_delta` / `driver_wet_n` are
+**kept**. Every pipeline module takes `--features` / `--out-dir` / `--models-dir`,
+so the corrected artifacts were rebuilt into `data/v2/` and `models/v2/` without
+touching the hash-frozen originals.
+
+### Why
+
+- **Two different leaks, only one of them obvious.** The raw readings are
+  straightforwardly unavailable before lights-out. The temperature affinity is
+  subtler and more instructive: its *values* were historical, so it passed the
+  Gate 2 audit, but its *selection* used the target race's outcome-time data.
+  Gate 2 tests whether a feature aggregates prior races; it never tested whether
+  the inputs choosing it exist at the forecast cutoff. That gap is why
+  `tests/test_columns.py` now guards the contract directly.
+- **Not all weather features leak, and the distinction was checked rather than
+  assumed.** `driver_wet_n` averages 16.3 at wet target races and 15.6 at dry
+  ones - it counts a driver's PRIOR wet races and does not reveal the target's
+  conditions. Dropping it would have discarded usable pre-cutoff signal in the
+  name of caution.
+- **Removed rather than imputed.** FIX_PLAN.md section 2 P0-1 says to remove
+  unavailable race-weather inputs from the first corrected benchmark. Filling
+  them with a global mean would have kept a column whose training values came
+  from hindsight and whose serving values are a constant - strictly worse than
+  not having it.
+
+### The result contradicted the stated expectation
+
+Every previous entry, `README.md`, and this file predicted the P0 fixes would
+move metrics DOWN. **They did not.** On the held-out 2026 season:
+
+| | legacy (30 feat) | corrected (22 feat) |
+| --- | ---: | ---: |
+| classifier ROC-AUC | 0.7908 | **0.8178** |
+| classifier log-loss | 0.5440 | **0.5258** |
+| ranker podium overlap | 0.5758 | **0.6061** |
+| ranker top-10 overlap | 0.6909 | **0.7273** |
+| ranker spearman_all | 0.5005 | **0.5394** |
+| blend winner accuracy | 0.7273 | 0.7273 |
+| grid baseline (control) | 0.6432 | 0.6432 |
+
+The mechanism is visible in the generalisation gap. Validation AUC fell slightly
+(0.8455 -> 0.8424) while test AUC rose (0.7908 -> 0.8178), halving the val-test
+gap from +0.0547 to +0.0245. The weather features were helping the model fit the
+validation season without generalising to the test season - on 1359 training
+rows, eight noisy columns cost more in overfitting than they returned in signal.
+
+**This is not evidence that the model got better.** The test season is 11 races,
+where one race is 9.1 percentage points of winner accuracy, and FIX_PLAN.md
+section 8 is explicit that this sample cannot rank candidates. The defensible
+claim is narrower: removing the leak did not cost accuracy, so there is no
+tension between correctness and performance here.
+
+### Trade-offs / what this costs
+
+- **A real signal may have been discarded.** Wet races genuinely change finishing
+  order. What is gone is the ability to use *this* race's conditions; it returns
+  in milestone 3 only with a forecast whose pre-cutoff availability can be proven
+  (FIX_PLAN.md section 5.D), never with observed or reanalysis weather.
+- **The blend's alpha moved 0.6 -> 0.5**, refitted on the corrected validation
+  season and saved to `models/v2/blend_alpha.json`. The frozen
+  `models/blend_alpha.json` is untouched.
+- **`models/v2/` now means "current corrected pipeline", superseding the 1.3
+  artifacts** written to the same directory. Since [005] measured no difference
+  between them, nothing comparable was lost - but the directory is a working
+  area, not a version history, and should be replaced by the milestone 5 model
+  bundle.
+- **`baseline.py` needed a second pin.** It imported `FEATURE_COLS`, so shrinking
+  the list to 22 broke it against the 30-feature frozen model. It now reads
+  `models/feature_cols.json`. Worth noting the failure mode: it raised a
+  LightGBM shape error, but a subtler change could have silently scored the
+  legacy model on a different feature set and misreported the historical record.
+- The fill policy still fits global means over all partitions (P0-2, unfixed),
+  so the corrected numbers above are not yet leak-free.
+
+### Verification
+
+- 87 tests pass (8 new in `tests/test_columns.py`).
+- **Gate 2 passes on the rebuilt features**, including all debut and
+  first-circuit-visit checks.
+- `models/v2/feature_cols.json` contains 22 names and none of the eight removed.
+- Every artifact hashed in `reports/baseline.json` is byte-intact, and
+  `python -m src.baseline` still reports "NONE (metrics identical)".
+- Grid baseline is unchanged at every metric, as it must be - it does not use
+  the model - which confirms the comparison is like-for-like.
+
+### Not done in this increment
+
+- Fitted-on-training-only preprocessing (P0-2) and the single shared
+  `build_asof_features` path (P0-3). Those are increments 1.5 and 1.6.
+- `predict.py` still loads from `models/` and has no `--models-dir`.
+- `README.md` remains stale and now understates the drift: it documents 30
+  features and race-condition weather.
+
+---
+
 <!-- Append new entries above this line, newest last. -->

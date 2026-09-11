@@ -15,8 +15,13 @@ of live forecasting quality -- they are measured on features that include
 race-session weather and globally-fitted imputation, i.e. information that is
 not available before lights-out. See FIX_PLAN.md section 2.
 
-Consequently the P0 fixes are expected to move these numbers DOWN. That is the
-leak being removed, not a regression.
+The expectation when this was written was that removing the leaks would move
+these numbers DOWN. Increment 1.4 showed otherwise: dropping the eight weather
+inputs left winner accuracy unchanged and improved test AUC (0.7908 -> 0.8178)
+while validation AUC fell slightly, i.e. those features were helping the model
+fit the validation season without generalising. Either direction is acceptable;
+what matters is that the comparison is made against this frozen record rather
+than against a remembered number.
 
 Run: python -m src.baseline
 """
@@ -35,7 +40,7 @@ import joblib
 import numpy as np
 import pandas as pd
 
-from .columns import FEATURE_COLS, TARGET
+from .columns import TARGET
 
 log = logging.getLogger("baseline")
 
@@ -205,7 +210,7 @@ def data_coverage(df: pd.DataFrame) -> dict[str, Any]:
     return {
         "n_rows": int(len(df)),
         "n_races": int(df.groupby(["year", "round"]).ngroups),
-        "n_features": len(FEATURE_COLS),
+        "n_features": len(legacy_feature_cols()),
         "date_min": str(df["date"].min()),
         "date_max": str(df["date"].max()),
         "seasons": {str(year): {"rows": int(row.rows), "races": int(row.races)}
@@ -230,18 +235,33 @@ def classifier_metrics(y: np.ndarray, p: np.ndarray) -> dict[str, float]:
     }
 
 
+def legacy_feature_cols() -> list[str]:
+    """The feature list the FROZEN models were trained with.
+
+    Read from models/feature_cols.json rather than imported from columns.py.
+    Increment 1.4 removed eight leaking weather inputs from FEATURE_COLS, which
+    immediately broke this recorder: the saved model expects the 30 columns it
+    was fitted on. Importing the live list would either crash or, worse, score
+    the legacy model on a different feature set and silently misreport the
+    historical baseline.
+    """
+    with (MODELS_DIR / "feature_cols.json").open() as fh:
+        return json.load(fh)
+
+
 def scored_test_frame(df: pd.DataFrame) -> tuple[pd.DataFrame, int, float]:
     """Attach every legacy score column to the held-out test season."""
     latest = int(df["year"].max())
     test = df[df["year"] == latest].copy()
+    feature_cols = legacy_feature_cols()
 
     clf = joblib.load(MODELS_DIR / "model.joblib")
     ranker = joblib.load(MODELS_DIR / "rank_model.joblib")
     with (MODELS_DIR / "blend_alpha.json").open() as fh:
         alpha = float(json.load(fh)["alpha"])
 
-    test["p_top10"] = clf.predict_proba(test[FEATURE_COLS])[:, 1]
-    test["rank_score"] = ranker.predict(test[FEATURE_COLS])
+    test["p_top10"] = clf.predict_proba(test[feature_cols])[:, 1]
+    test["rank_score"] = ranker.predict(test[feature_cols])
     test["blend_score"] = _legacy_add_blended_score(test, "rank_score", alpha)
     return test, latest, alpha
 

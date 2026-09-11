@@ -51,14 +51,16 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--features", type=Path, default=DATA_DIR / "features.parquet")
+    parser.add_argument("--models-dir", type=Path, default=MODELS_DIR)
     parser.add_argument("--write", action="store_true",
                         help="overwrite models/blend_alpha.json with the chosen alpha")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
-    ranker = joblib.load(MODELS_DIR / "rank_model.joblib")
-    df = pd.read_parquet(DATA_DIR / "features.parquet")
+    ranker = joblib.load(args.models_dir / "rank_model.joblib")
+    df = pd.read_parquet(args.features)
     df["rank_score"] = ranker.predict(df[FEATURE_COLS])
     _, val, test, latest = chronological_split(df)
 
@@ -100,7 +102,7 @@ def main():
           "selection criterion is a separate decision (FIX_PLAN.md section 2, "
           "P1) and is deliberately not bundled into this correctness pass.")
 
-    alpha_path = MODELS_DIR / "blend_alpha.json"
+    alpha_path = args.models_dir / "blend_alpha.json"
     if args.write:
         with open(alpha_path, "w") as f:
             json.dump({"alpha": float(best_alpha)}, f, indent=2)

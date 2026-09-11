@@ -58,9 +58,17 @@ def chronological_split(df: pd.DataFrame):
 
 
 def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--features", type=Path, default=DATA_DIR / "features.parquet")
+    parser.add_argument("--models-dir", type=Path, default=MODELS_DIR)
+    args = parser.parse_args()
+    models_dir = args.models_dir
+
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
-    df = pd.read_parquet(DATA_DIR / "features.parquet")
+    df = pd.read_parquet(args.features)
     train, val, test, latest = chronological_split(df)
     log.info("Split (latest season = %s): train=%s rows (<=%s), val=%s rows (%s), "
              "test=%s rows (%s, HELD OUT)",
@@ -80,16 +88,17 @@ def main():
     log.info("Best iteration: %s", clf.best_iteration_)
     log.info("Best val scores: %s", dict(clf.best_score_.get("valid_0", {})))
 
-    MODELS_DIR.mkdir(exist_ok=True)
-    joblib.dump(clf, MODELS_DIR / "model.joblib")
-    clf.booster_.save_model(str(MODELS_DIR / "model.txt"))
-    with open(MODELS_DIR / "feature_cols.json", "w") as f:
+    models_dir.mkdir(parents=True, exist_ok=True)
+    joblib.dump(clf, models_dir / "model.joblib")
+    clf.booster_.save_model(str(models_dir / "model.txt"))
+    with open(models_dir / "feature_cols.json", "w") as f:
         json.dump(FEATURE_COLS, f, indent=2)
     # fill-values dict travels with the model (needed at inference, spec 4.3/6.4)
-    shutil.copy(DATA_DIR / "fill_values.json", MODELS_DIR / "fill_values.json")
+    shutil.copy(args.features.parent / "fill_values.json",
+                models_dir / "fill_values.json")
 
     log.info("Saved model.joblib, model.txt, feature_cols.json, fill_values.json -> %s",
-             MODELS_DIR)
+             models_dir)
     print("\nNext: python -m src.evaluate   (VALIDATION GATE 3 -- beat the grid baseline)")
 
 

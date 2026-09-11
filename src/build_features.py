@@ -79,7 +79,7 @@ def add_reliability(df: pd.DataFrame) -> pd.DataFrame:
 # "won"). Fallback chain: driver_overall_avg_finish -> global mean finish.
 POSITION_SCALED = [
     "form_avg_finish_3", "form_avg_quali_3", "season_avg_finish",
-    "driver_temp_bin_avg", "driver_circuit_avg_finish",
+    "driver_circuit_avg_finish",
     "driver_circuit_best_finish", "team_circuit_avg_finish",
 ]
 # Rate features on a 0-1 scale: filled with the global mean of that rate.
@@ -88,11 +88,13 @@ RATE_FEATURES = ["form_dnf_rate_5", "driver_dnf_rate", "team_dnf_rate",
 # Deltas and sums where 0 is the neutral value.
 ZERO_FILL = ["form_avg_points_3", "momentum", "driver_wet_delta",
              "quali_gap_to_teammate", "form_finish_vs_teammate",
-             "driver_wet_n", "driver_temp_bin_n", "driver_races_at_circuit",
+             "driver_wet_n", "driver_races_at_circuit",
              "constructor_standing_prior"]
 # Flags with sensible defaults (spec 2.5).
 FLAG_DEFAULTS = {"is_rookie_here": 1, "teammate_available": 0, "pit_start": 0}
-# Race-condition weather: filled with global means (rain flags with 0).
+# Race-condition weather is NO LONGER a model input (increment 1.4); these
+# columns are retained in features.parquet for auditing only. They are still
+# filled so the stored frame has no stray NaNs, but nothing reads the fills.
 WEATHER_MEAN_FILL = ["air_temp", "track_temp", "humidity", "wind_speed"]
 WEATHER_ZERO_FILL = ["rainfall", "is_wet"]
 
@@ -141,7 +143,7 @@ def apply_fill_policy(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     return df, fills
 
 
-def build(raw_path: Path = RAW_PATH) -> pd.DataFrame:
+def build(raw_path: Path = RAW_PATH, out_dir: Path = DATA_DIR) -> pd.DataFrame:
     df = pd.read_parquet(raw_path)
     df["date"] = pd.to_datetime(df["date"])
     df = sort_frame(df)
@@ -159,8 +161,8 @@ def build(raw_path: Path = RAW_PATH) -> pd.DataFrame:
 
     # Pre-fill snapshot for the Gate 2 audit (first-race values must be NaN
     # here, never a real computed stat).
-    DATA_DIR.mkdir(exist_ok=True)
-    df.to_parquet(PREFILL_PATH, index=False)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(out_dir / PREFILL_PATH.name, index=False)
 
     df, fills = apply_fill_policy(df)
 
@@ -170,18 +172,29 @@ def build(raw_path: Path = RAW_PATH) -> pd.DataFrame:
     if len(bad):
         raise AssertionError(f"NaNs remain in feature matrix after fill:\n{bad}")
 
-    df.to_parquet(FEATURES_PATH, index=False)
-    with open(FILLS_PATH, "w") as f:
+    df.to_parquet(out_dir / FEATURES_PATH.name, index=False)
+    with open(out_dir / FILLS_PATH.name, "w") as f:
         json.dump(fills, f, indent=2)
 
-    log.info("Wrote %s (%s rows, %s features)", FEATURES_PATH, len(df), len(FEATURE_COLS))
-    log.info("Wrote %s", FILLS_PATH)
+    log.info("Wrote %s (%s rows, %s features)",
+             out_dir / FEATURES_PATH.name, len(df), len(FEATURE_COLS))
+    log.info("Wrote %s", out_dir / FILLS_PATH.name)
     return df
 
 
 def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--raw", type=Path, default=RAW_PATH)
+    parser.add_argument("--out-dir", type=Path, default=DATA_DIR,
+                        help="where features/prefill/fill_values go. Point this at "
+                             "a new directory to avoid overwriting artifacts hashed "
+                             "in reports/baseline.json.")
+    args = parser.parse_args()
+
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-    df = build()
+    df = build(args.raw, args.out_dir)
     print(f"\nfeatures.parquet: {len(df)} rows x {len(FEATURE_COLS)} features; "
           f"target mean = {df[TARGET].mean():.4f}")
     print("Next: python -m src.audit_leakage   (VALIDATION GATE 2 -- mandatory)")

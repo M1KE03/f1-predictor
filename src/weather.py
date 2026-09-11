@@ -77,19 +77,20 @@ def add_weather_affinity(df: pd.DataFrame) -> pd.DataFrame:
     # negative = better in the wet than overall
     df["driver_wet_delta"] = df["driver_wet_avg"] - df["driver_overall_avg_finish"]
 
-    # --- temperature-bin affinity ----------------------------------------
-    # Caveat honoured (spec 2.2): confounded with circuit identity; keep the
-    # _n count so the model can discount thin samples. No manual weighting.
-    df["temp_bin"] = temp_bin_series(df["track_temp"])
-    for b in TEMP_BIN_LABELS:
-        df = _asof_subset_stats(df, df["temp_bin"] == b, f"tb_{b}")
-
-    cond = [df["temp_bin"] == b for b in TEMP_BIN_LABELS]
-    df["driver_temp_bin_avg"] = np.select(
-        cond, [df[f"tb_{b}_avg"] for b in TEMP_BIN_LABELS], default=np.nan)
-    df["driver_temp_bin_n"] = np.select(
-        cond, [df[f"tb_{b}_n"] for b in TEMP_BIN_LABELS], default=0.0)
-
-    df = df.drop(columns=[c for b in TEMP_BIN_LABELS
-                          for c in (f"tb_{b}_avg", f"tb_{b}_n")] + ["temp_bin"])
+    # --- temperature-bin affinity: REMOVED (increment 1.4) ----------------
+    # The bucket VALUES were historical, but the choice of which bucket to read
+    # was made with the target race's realized track temperature:
+    #
+    #     df["temp_bin"] = temp_bin_series(df["track_temp"])   # target race!
+    #     driver_temp_bin_avg = np.select(temp_bin == b, tb_{b}_avg)
+    #
+    # That is unavailable an hour before lights-out, so the feature encoded
+    # hindsight about race conditions. It passed the Gate 2 audit because that
+    # audit only checks whether a value aggregates prior races -- not whether
+    # the inputs selecting it exist at the forecast cutoff.
+    #
+    # temp_bin_series() is kept below: it is still the right bucketing rule and
+    # will be reused once a forecast with provable pre-cutoff availability is
+    # ingested (FIX_PLAN.md section 5.D). Do not reinstate this block against
+    # observed or reanalysis temperatures.
     return df
