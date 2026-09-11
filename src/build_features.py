@@ -15,7 +15,7 @@ Outputs (into --out-dir):
 
 Run:
     python -m src.build_features
-    python -m src.build_features --raw data/raw_results.parquet --out-dir data/v2
+    python -m src.build_features --raw data/v2/raw_results.parquet --out-dir data/v2
 
 Then: python -m src.audit_leakage   (VALIDATION GATE 2 -- do not skip)
 """
@@ -35,7 +35,12 @@ log = logging.getLogger("build_features")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data"
-RAW_PATH = DATA_DIR / "raw_results.parquet"
+# Defaults point at the v2 working area, never at the frozen legacy artifacts in
+# `data/`: those are hashed in reports/baseline.json and a bare run of this
+# module used to overwrite them. `data/raw_results.parquet` is the old 103-race
+# 2022-2026 table and is not what new work is built from.
+WORK_DIR = DATA_DIR / "v2"
+RAW_PATH = WORK_DIR / "raw_results.parquet"
 PREFILL_NAME = "features_prefill.parquet"
 FEATURES_NAME = "features.parquet"
 FILLS_NAME = "fill_values.json"
@@ -46,7 +51,7 @@ FILLS_NAME = "fill_values.json"
 EXTRA_COLS: tuple[str, ...] = ()
 
 
-def build(raw_path: Path = RAW_PATH, out_dir: Path = DATA_DIR,
+def build(raw_path: Path = RAW_PATH, out_dir: Path = WORK_DIR,
           practice_path: Path | None = None) -> pd.DataFrame:
     raw = pd.read_parquet(raw_path)
     raw["date"] = pd.to_datetime(raw["date"])
@@ -103,10 +108,10 @@ def main():
     parser.add_argument("--raw", type=Path, default=RAW_PATH)
     parser.add_argument("--practice", type=Path, default=None,
                         help="practice pace parquet (default: alongside --raw)")
-    parser.add_argument("--out-dir", type=Path, default=DATA_DIR,
-                        help="where features/prefill/fill_values go. Point this at "
-                             "a new directory to avoid overwriting artifacts hashed "
-                             "in reports/baseline.json.")
+    parser.add_argument("--out-dir", type=Path, default=WORK_DIR,
+                        help="where features/prefill/fill_values go. Defaults to "
+                             "data/v2; do NOT point it at data/, whose artifacts "
+                             "are hashed in reports/baseline.json.")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")

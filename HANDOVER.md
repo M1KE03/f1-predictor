@@ -125,7 +125,7 @@ fitted imputation state, or serving parity.
 
 | # | Milestone | Status |
 | --- | --- | --- |
-| 0 | Preserve & reproduce: baseline.json, manifest, dep lock, README refresh | **0.1 DONE** (README refresh deferred to M1) |
+| 0 | Preserve & reproduce: baseline.json, manifest, dep lock, README refresh | **DONE** (README rewritten 2026-09-12 against the 6-fold/127-race results) |
 | 1 | Correct contracts & replay: weather, fitted state, labels, shared as-of path, deterministic ties | **DONE** (1.1-1.7). All five P0 defects closed |
 | 2 | Evaluation harness: `backtest.py`, `metrics.py`, real winner gates | **DONE** - 8 folds / 47 races; gates exit non-zero |
 | 3 | Qualifying & car features: `qualifying.py`, `ratings.py` | **DONE**. 3.1 quali pace: no gain. 3.2 race pace + alpha fix: best result so far |
@@ -179,7 +179,7 @@ committed by Claude - the user runs all git commands.
 | --- | --- | --- |
 | 2 | `src/backtest.py` expanding-window folds + `src/gates.py` paired intervals | **changed the headline finding - see below** |
 
-Test suite: **149 tests**, `python -m pytest`.
+Test suite: **267 tests**, `python -m pytest`.
 
 ### Artifact layout (IMPORTANT)
 
