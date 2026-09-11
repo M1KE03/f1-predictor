@@ -1,8 +1,9 @@
-# CLAUDE.md
+# INSTRUCTIONS
 
 
-Project instructions for Claude Code, loaded automatically at the start of every
-session in this repo. This is where response rules live.
+Project instructions for Claude Code. NOTE: only a file named CLAUDE.md is loaded
+automatically at session start; point Claude here explicitly, or keep a CLAUDE.md
+that references this file. This is where response rules live.
 
 
 ---

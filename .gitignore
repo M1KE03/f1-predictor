@@ -1,7 +1,4 @@
 cache/
-data/
-models/
-reports/
 __pycache__/
 *.pyc
 .venv/
@@ -15,3 +12,16 @@ __pycache__/
 .ruff_cache/
 .coverage
 htmlcov/
+
+# Data, models and reports are generated artifacts and stay untracked --
+# EXCEPT the small JSON provenance records, which are the evidence that a
+# result was measured against a known dataset and model bundle. Git cannot
+# re-include a file whose parent directory is excluded, so these use the
+# `dir/*` + negation form rather than `dir/`.
+data/*
+!data/.gitkeep
+models/*
+!models/.gitkeep
+reports/*
+!reports/.gitkeep
+!reports/baseline.json

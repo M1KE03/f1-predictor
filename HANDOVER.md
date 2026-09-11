@@ -7,7 +7,7 @@ Claude session and it should be able to continue without re-reading everything.
 any milestone lands. Keep it current, not comprehensive — detail lives in
 `REASONING.md` and `FIX_PLAN.md`.
 
-**Last updated:** 2026-09-11 — session 1 (orientation only, no code changed)
+**Last updated:** 2026-09-11 — session 1 (milestone 0 increment 0.1 done)
 
 ---
 
@@ -20,7 +20,8 @@ any milestone lands. Keep it current, not comprehensive — detail lives in
 | Run modules as | `python -m src.<name>` from project root |
 | The diagnosis/plan | `FIX_PLAN.md` (authoritative; produced by Codex review) |
 | Decision log | `REASONING.md` |
-| Response rules | `CLAUDE.md` |
+| Response rules | `INSTRUCTIONS.md` (NOT auto-loaded — only `CLAUDE.md` is) |
+| Frozen legacy baseline | `reports/baseline.json` (regenerate: `python -m src.baseline`) |
 
 Outer folder `C:\Users\micha\Documents\f1-predictor\` is just a wrapper — the
 real project is the nested `f1-predictor\` directory. Do not confuse them.
@@ -124,7 +125,7 @@ fitted imputation state, or serving parity.
 
 | # | Milestone | Status |
 | --- | --- | --- |
-| 0 | Preserve & reproduce: baseline.json, manifest, dep lock, README refresh | NOT STARTED |
+| 0 | Preserve & reproduce: baseline.json, manifest, dep lock, README refresh | **0.1 DONE** (README refresh deferred to M1) |
 | 1 | Correct contracts & replay: weather, fitted state, labels, shared as-of path, deterministic ties | NOT STARTED |
 | 2 | Evaluation harness: `backtest.py`, `metrics.py`, real winner gates | NOT STARTED |
 | 3 | Qualifying & car features: `qualifying.py`, `ratings.py` | NOT STARTED |
@@ -148,6 +149,8 @@ it. No feature or model work before both land.
   justified transformer trial, and only after M0-M4.
 - Never randomly split driver rows — chronological event blocks only.
 - Synthetic data must never be written to the real raw-data path.
+- Work in small increments: 1-2 related features each, one clean commit's worth.
+  Split anything larger into sub-increments.
 
 ---
 
@@ -155,15 +158,27 @@ it. No feature or model work before both land.
 
 **Session 1 (2026-09-11):** read the full repo and `FIX_PLAN.md`, verified the
 plan's data claims against the parquet files. **No code changed.** Created
-`HANDOVER.md`, `REASONING.md`, `CLAUDE.md`.
+`HANDOVER.md`, `REASONING.md`, `INSTRUCTIONS.md`.
 
 **Open questions put to the user, not yet answered:**
 1. Do milestone 0 (preserve artifacts + `reports/baseline.json`) before touching
    anything, so we can prove what changed?
-2. Git workflow — one commit per milestone? A branch per milestone?
 
-**Next action:** await the user's response rules in `CLAUDE.md`, then start
-milestone 0 or 1.
+**Resolved:** git workflow — Claude never runs git commands that change history
+or remote state. Changes are proposed as discrete increments with a suggested
+commit message; the user executes all git operations. See `INSTRUCTIONS.md`.
+
+**Increment 0.1 complete (uncommitted, awaiting user review):**
+- `src/baseline.py` (new) -> `reports/baseline.json`
+- `.gitignore` rewritten so JSON provenance is trackable (`dir/*` + negation)
+- `requirements.lock.txt` (new)
+- Reproduces FIX_PLAN section 2's table exactly; all 5 review hashes match
+- Row-order defect quantified: max Spearman spread 0.0080 over 5 shuffles
+
+**Next action:** increment 1.1 — label semantics (`result_order`,
+`officially_classified`, `started`, `finished`, `status_category` in
+`ingest.py`), plus a `tests/` skeleton and pytest, since the repo has no test
+suite and FIX_PLAN section 10 requires label fixtures.
 
 ---
 

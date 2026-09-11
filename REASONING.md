@@ -148,4 +148,83 @@ confirmed; saved alpha 0.6 confirmed. Recorded SHA-256 hashes are in
 
 ---
 
+## [001] Freeze the legacy baseline before any correction
+
+**Date:** 2026-09-11 · **Milestone:** 0 · **Files:** `src/baseline.py` (new),
+`.gitignore`, `requirements.lock.txt` (new)
+**Status:** implemented
+
+### Before
+
+No record bound the dataset to the artifacts to the numbers. `FIX_PLAN.md`
+quoted metrics in prose, but nothing in the repo could regenerate them, and
+`data/`, `models/` and `reports/` were entirely gitignored, so no provenance
+evidence could be committed at all. Any post-fix number would have been
+compared against a remembered figure rather than a measured one.
+
+### After
+
+- `src/baseline.py` writes `reports/baseline.json`: SHA-256 of seven artifacts,
+  interpreter and package versions, per-season coverage, split convention, and
+  the legacy metrics for all four ordering methods.
+- `.gitignore` switched from `dir/` to `dir/*` plus negations, so small JSON
+  provenance records are tracked while parquet/joblib/png artifacts stay out.
+- `requirements.lock.txt` pins the exact environment that produced the record.
+
+### Why
+
+- **A baseline that cannot be regenerated is not a baseline.** The P0 fixes are
+  expected to move the metrics down; without a committed record, that drop is
+  indistinguishable from a bug introduced during the fix.
+- **The baseline records defects, not just scores.** `known_defects` stores the
+  row-order Spearman spread across five shuffles. It is the regression target
+  for the deterministic tie policy: the number must become exactly 0.
+- **Legacy behaviour is reproduced, not corrected.** `baseline.py` calls the
+  existing `ranking_metrics` / `order_metrics` rather than reimplementing them,
+  and keeps the misleading `top1_hit_rate` name. Recording what the code scores
+  today is the entire point; correcting on the way in would destroy the
+  comparison.
+- **Git could not store the evidence.** Git cannot re-include a file whose
+  parent directory is excluded, so `reports/` + `!reports/baseline.json` would
+  have silently failed. `reports/*` + negation is the form that works.
+
+### Trade-offs / what this costs
+
+- `baseline.py` imports `evaluate.py`, which imports matplotlib at module level.
+  Accepted for now: this module is temporary scaffolding and the coupling
+  disappears when the milestone 2 metric harness replaces these functions.
+- The metrics are measured on a leaky feature matrix and an 11-race test season.
+  One race is 9.1 percentage points of winner accuracy. The file therefore
+  carries an explicit `description` saying it is not a clean estimate of live
+  forecasting quality, so the numbers cannot later be quoted as a target.
+- `requirements.lock.txt` duplicates `requirements.txt`. Deliberate: the loose
+  ranges stay for fresh installs, the lock reproduces the frozen result.
+- Only the shuffle defect is quantified. Weather leakage and train/serve skew
+  are recorded in `FIX_PLAN.md` but not yet measured as numbers; they need the
+  milestone 2 harness.
+
+### Verification
+
+- All five hashes recorded in `FIX_PLAN.md`'s appendix still match the artifacts
+  on disk, so the diagnosis and this baseline describe the same bytes.
+- `python -m src.baseline` reproduces `FIX_PLAN.md` section 2's table exactly:
+  grid 0.7273 / 0.5758 / 0.7364 / 0.6432; classifier 0.2727 / 0.4848 / 0.7545 /
+  0.5672; ranker 0.5455 / 0.5758 / 0.6909 / 0.5005; blend 0.7273 / 0.5758 /
+  0.7545 / 0.6289 (winner / podium / top-10 overlap / Spearman). Independent
+  confirmation that the review's diagnostic numbers are correct.
+- Row-order dependence confirmed present: max Spearman spread 0.0080 over five
+  shuffles.
+- `git check-ignore` confirms `reports/baseline.json` and the `.gitkeep` files
+  are trackable while `raw_results.parquet`, `model.joblib` and
+  `feature_importance.png` remain ignored.
+
+### Not done in this increment
+
+`README.md` is still stale (claims 2018+ data and synthetic-only; the data is
+really 2022-2026 and real). Held back so this increment stays one reviewable
+concern; it belongs with the milestone 1 changes that alter the documented
+pipeline anyway.
+
+---
+
 <!-- Append new entries above this line, newest last. -->
