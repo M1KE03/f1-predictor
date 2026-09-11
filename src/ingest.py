@@ -20,6 +20,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from .labels import derive_labels
+
 log = logging.getLogger("ingest")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -165,11 +167,7 @@ def race_rows(session, event, year: int, rnd: int) -> pd.DataFrame:
         pos = r.get("Position")
         pos = float(pos) if pd.notna(pos) else np.nan
         status = str(r.get("Status") or "")
-        # spec 1.4: anything that isn't "Finished" or "+N Lap(s)" is a DNF.
-        # The source emits lapped finishers two ways -- "+1 Lap"/"+2 Laps" and
-        # a bare "Lapped" -- so both spellings must count as classified.
-        is_dnf = 0 if (status in ("Finished", "Lapped")
-                       or status.startswith("+")) else 1
+        laps = r.get("Laps")
 
         rows.append(dict(
             year=year, round=rnd,
@@ -183,13 +181,30 @@ def race_rows(session, event, year: int, rnd: int) -> pd.DataFrame:
             pit_start=pit_start,
             position=pos,
             status=status,
-            is_dnf=is_dnf,
-            classified=int(pd.notna(pos)),
+            # Raw source fields consumed by src.labels below. ClassifiedPosition
+            # is the authority on official classification; Laps is kept for the
+            # 90%-distance rule and for pace-per-stint work later.
+            classified_position_raw=r.get("ClassifiedPosition"),
+            laps_completed=float(laps) if pd.notna(laps) else np.nan,
             points=float(r.get("Points") if pd.notna(r.get("Points")) else 0.0),
-            finished_top10=int(pd.notna(pos) and pos <= 10),  # THE LABEL
             **wrow,
         ))
-    return pd.DataFrame(rows)
+
+    df = pd.DataFrame(rows)
+
+    # Separate the conflated outcome concepts (FIX_PLAN section 2, P0-6):
+    # result_order / officially_classified / started / finished /
+    # status_category, plus the is_winner / is_podium / finished_top10 labels.
+    df = derive_labels(df, classified_position_col="classified_position_raw")
+
+    # DEPRECATED aliases kept so downstream modules that have not been migrated
+    # yet keep working. `classified` is true for 99.9% of rows and means only
+    # "a result place exists" -- use officially_classified. `is_dnf` is the
+    # complement of `finished`; it is derived from it here rather than
+    # recomputed, so the two can no longer disagree.
+    df["is_dnf"] = 1 - df["finished"]
+    df["classified"] = df["result_order"].notna().astype(int)
+    return df
 
 
 # ---------------------------------------------------------------------------

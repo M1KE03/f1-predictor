@@ -227,4 +227,150 @@ pipeline anyway.
 
 ---
 
+## [002] Separate the conflated result-label concepts
+
+**Date:** 2026-09-11 · **Milestone:** 1 (increment 1.1) · **Files:**
+`src/labels.py` (new), `src/ingest.py`, `tests/test_labels.py` (new),
+`pytest.ini` (new), `requirements-dev.txt` (new)
+**Status:** implemented
+
+### Before
+
+`ingest.race_rows()` derived every outcome concept from two expressions:
+
+```python
+is_dnf     = 0 if status in ("Finished", "Lapped") or status.startswith("+") else 1
+classified = int(pd.notna(pos))
+```
+
+`classified` therefore meant only "a result place exists".
+
+### After
+
+`src/labels.py` defines the vocabulary and derives seven independent fields —
+`result_order`, `classified_position_raw`, `status_category`, `started`,
+`finished`, `officially_classified`, `officially_classified_source` — plus
+`is_winner` / `is_podium` / `finished_top10`. `ingest.py` calls it and now also
+captures FastF1's `ClassifiedPosition` and `Laps`. `is_dnf` and `classified`
+survive as deprecated aliases so unmigrated consumers keep working, with
+`is_dnf` now *derived* as `1 - finished` rather than separately recomputed, so
+the two can no longer disagree.
+
+### Why
+
+Measured on the stored data before writing any code:
+
+- **`classified` is 99.90% constant** — 2078 of 2080 rows. The only two zeros
+  are 2022 R2 MSC and 2023 R15 STR, both "Withdrew". It cannot distinguish a
+  winner from a non-starter, so every consumer gating on it is gating on
+  nothing. This is stronger than `FIX_PLAN.md` records and is the real reason
+  the flag has to go.
+- **`position` is result order, not finishing position.** FastF1 publishes the
+  full classification: in 2026 R1, retirements take places 18-20 and the two
+  DNS take 21-22. Preserving that order is correct per `FIX_PLAN.md` section 4
+  ("do not blindly collapse every retirement to last") — but nothing in the
+  schema said so, so the meaning was only discoverable by inspection.
+- **Two documented behaviours were false.** `train_rank.py`'s docstring says
+  DNFs receive zero relevance; 303 of 305 retirements actually receive
+  position-based relevance. `README.md` says Spearman is computed on finishers
+  only "since DNFs have no finishing position"; it is computed over all 2078
+  rows, DNFs included. Both follow directly from `classified` being ~constant.
+- **Cause coverage does not support a mechanical/incident split.** 197 of 305
+  retirements (64.6%) carry the bare status "Retired" with no cause.
+  `FIX_PLAN.md` section 5.C proposes separating mechanical failures from
+  incidents "where status coverage supports it" — on this dataset it does not,
+  for two thirds of retirements. Hence the explicit `retired_unspecified`
+  category rather than a guess.
+
+### Trade-offs / what this costs
+
+- **`officially_classified` is derived, not authoritative, on stored data.**
+  The 90%-race-distance rule needs lap counts, which were never stored. A
+  driver who retired late but completed the distance IS officially classified
+  and status alone cannot reveal that. Rather than hide the uncertainty, every
+  row carries `officially_classified_source`, and all 2080 stored rows read
+  `derived_from_status`. Re-ingestion (needs network) upgrades them to
+  `classified_position`.
+- **Two bodywork statuses are judgement calls.** "Undertray" (3) and "Front
+  wing" (1) map to `mechanical`. They are ambiguous between contact damage and
+  failure, but the source reports contact separately as "Collision damage", so
+  a bare component name is more likely a failure. 4 rows; revisit if it grows.
+- **The deprecated aliases are debt.** `is_dnf` and `classified` stay until
+  consumers migrate in a later increment. Leaving them avoids bundling a
+  breaking change into a definition change.
+- **The backfill writes a second file** (`data/raw_results_labeled.parquet`)
+  rather than editing `raw_results.parquet`, because `reports/baseline.json`
+  hashes the original. Path sprawl, accepted until the `data/raw`,
+  `data/snapshots`, `data/features` restructure in `FIX_PLAN.md` section 5.A.1.
+- **pytest is new to the repo.** Bundled here rather than committed separately
+  so the first test ships with the code it covers.
+
+### Verification
+
+- 53 tests pass. Fixtures cover a normal finish, a lapped runner, both lapped
+  spellings, a classified retirement, a bare retirement, DNS, DSQ and
+  withdrawal, plus the ClassifiedPosition-wins-over-status case.
+- Backfill over all 2080 stored rows: **every status mapped, zero `unknown`**.
+  Categories: finished 1775, retired_unspecified 197, mechanical 42,
+  accident 37, did_not_start 16, disqualified 10, withdrawn 3.
+- **`finished_top10` changed on 0 rows.** The new definitions are
+  behaviour-preserving for the target label — no silent relabelling.
+- `is_dnf` and `classified` reproduce their legacy values exactly on all rows.
+- Checked and found NOT to be a problem: DSQ and DNS rows cannot acquire a
+  top-10 label, because FastF1 demotes them to the back of the order (DSQ rows
+  land at 18-21, DNS at 18-22). Recorded as a test so it stays true.
+- `data/raw_results.parquet` still matches its frozen hash;
+  `python -m src.baseline` reproduces identical metrics.
+
+### Not done in this increment
+
+Downstream consumers (`train_rank.py` relevance, `evaluate.py` /
+`evaluate_rank.py` Spearman filters, `columns.py` ID_COLS) still read the
+deprecated `classified`. Migrating them changes model inputs and metric
+denominators, which is a behaviour change and belongs in its own reviewable
+increment.
+
+---
+
+## [003] Protect the frozen baseline from silent overwrite
+
+**Date:** 2026-09-11 · **Milestone:** 0 (follow-up to [001]) · **Files:**
+`src/baseline.py`
+**Status:** implemented
+
+### Before
+
+`python -m src.baseline` unconditionally rewrote `reports/baseline.json`.
+
+### After
+
+It refuses to overwrite an existing record unless `--force` is passed, and
+instead compares the freshly computed values against the frozen ones, reporting
+which of `artifacts` / `data` / `split` / `metrics` / `known_defects` differ.
+
+### Why
+
+Found by running into it: re-running the recorder purely to *verify* nothing had
+drifted produced a git diff, because `created_utc` and `git_commit` changed
+while every metric stayed identical. That is noise at best. The real hazard is
+worse — once the P0 fixes land and the metrics legitimately move, an
+unconditional write would silently replace the pre-correction reference with the
+post-correction one, destroying the only evidence of what the corrections cost.
+The guard turns the command into a comparison by default and a replacement only
+on request.
+
+### Trade-offs / what this costs
+
+Regenerating after a deliberate change now takes an extra flag. Acceptable: the
+whole point of the record is that replacing it should be a conscious act.
+
+### Verification
+
+`python -m src.baseline` on the committed record reports
+"Substantive differences vs the frozen record: NONE (metrics identical)" and
+leaves the file untouched — `git status` clean for `reports/`. This also
+confirms increment 1.1 did not perturb any baseline metric.
+
+---
+
 <!-- Append new entries above this line, newest last. -->

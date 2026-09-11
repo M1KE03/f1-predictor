@@ -267,8 +267,35 @@ def build_baseline() -> dict[str, Any]:
 
 
 def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--force", action="store_true",
+                        help="overwrite an existing reports/baseline.json")
+    args = parser.parse_args()
+
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     baseline = build_baseline()
+
+    # The baseline is meant to be frozen. Re-running to verify it would
+    # otherwise rewrite created_utc and git_commit, producing a diff that
+    # implies the record changed when the metrics are identical -- and, worse,
+    # would quietly replace the pre-correction reference once the fixes land.
+    if BASELINE_PATH.exists() and not args.force:
+        with BASELINE_PATH.open(encoding="utf-8") as fh:
+            existing = json.load(fh)
+        differing = sorted(
+            key for key in ("artifacts", "data", "split", "metrics", "known_defects")
+            if existing.get(key) != baseline[key])
+        print(f"\n{BASELINE_PATH} already exists -- not overwritten.")
+        print("Substantive differences vs the frozen record: "
+              f"{differing if differing else 'NONE (metrics identical)'}")
+        print("Re-run with --force to replace it.")
+        if differing:
+            print("\nWARNING: the current code no longer reproduces the frozen "
+                  "baseline. That is expected once the P0 fixes land -- record "
+                  "the change in REASONING.md rather than overwriting silently.")
+        return
 
     REPORTS_DIR.mkdir(exist_ok=True)
     with BASELINE_PATH.open("w", encoding="utf-8") as fh:

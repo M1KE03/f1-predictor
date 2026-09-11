@@ -7,7 +7,7 @@ Claude session and it should be able to continue without re-reading everything.
 any milestone lands. Keep it current, not comprehensive — detail lives in
 `REASONING.md` and `FIX_PLAN.md`.
 
-**Last updated:** 2026-09-11 — session 1 (milestone 0 increment 0.1 done)
+**Last updated:** 2026-09-11 — session 1 (increments 0.1 and 1.1 done)
 
 ---
 
@@ -95,9 +95,9 @@ The "~85%" figure that circulated is the classifier's **validation AUC
    global; `predict.py` applies only saved globals. 736 rows differ.
 4. **Quali position treated as final grid.** `--from-quali` reads Q `Position`,
    ignores penalties; missing drivers silently get a hard-coded pit start at 20.
-5. **Label semantics.** `classified = notna(Position)` conflates result-present
-   with officially-classified. Need separate `result_order`,
-   `officially_classified`, `started`, `finished`, `status_category`.
+5. ~~**Label semantics.**~~ **FIXED in 1.1** — `src/labels.py`. Note the flag was
+   99.90% constant (2078/2080), worse than FIX_PLAN recorded. Consumers not yet
+   migrated (increment 1.2).
 6. **Order-dependent output.** `rank(method='first')` ties break on row order;
    shuffling rows moves Spearman 0.5005 -> 0.5187.
 7. **`top1_hit` is misnamed** — true when the top pick finishes anywhere in the
@@ -126,7 +126,7 @@ fitted imputation state, or serving parity.
 | # | Milestone | Status |
 | --- | --- | --- |
 | 0 | Preserve & reproduce: baseline.json, manifest, dep lock, README refresh | **0.1 DONE** (README refresh deferred to M1) |
-| 1 | Correct contracts & replay: weather, fitted state, labels, shared as-of path, deterministic ties | NOT STARTED |
+| 1 | Correct contracts & replay: weather, fitted state, labels, shared as-of path, deterministic ties | **1.1 DONE** (labels); 1.2-1.5 pending |
 | 2 | Evaluation harness: `backtest.py`, `metrics.py`, real winner gates | NOT STARTED |
 | 3 | Qualifying & car features: `qualifying.py`, `ratings.py` | NOT STARTED |
 | 4 | Model comparison M0-M4 (+ Plackett-Luce, winner/podium heads) | NOT STARTED |
@@ -175,10 +175,16 @@ commit message; the user executes all git operations. See `INSTRUCTIONS.md`.
 - Reproduces FIX_PLAN section 2's table exactly; all 5 review hashes match
 - Row-order defect quantified: max Spearman spread 0.0080 over 5 shuffles
 
-**Next action:** increment 1.1 — label semantics (`result_order`,
-`officially_classified`, `started`, `finished`, `status_category` in
-`ingest.py`), plus a `tests/` skeleton and pytest, since the repo has no test
-suite and FIX_PLAN section 10 requires label fixtures.
+**Increment 1.1 complete (uncommitted):** `src/labels.py`, `tests/test_labels.py`
+(53 tests), `pytest.ini`, `requirements-dev.txt`; `ingest.py` wired up.
+Backfill: `python -m src.labels` -> `data/raw_results_labeled.parquet`.
+`finished_top10` changed on 0 rows; frozen artifact hash unchanged.
+
+**Next action:** increment 1.2 — migrate downstream consumers off the
+deprecated `classified` flag (`train_rank.py` relevance, `evaluate.py` and
+`evaluate_rank.py` Spearman filters, `columns.py` ID_COLS). This DOES change
+model inputs and metric denominators, so `reports/baseline.json` is the
+comparison point.
 
 ---
 
