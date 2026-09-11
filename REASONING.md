@@ -1,0 +1,151 @@
+# REASONING
+
+**Purpose:** the decision log. Every change gets an entry recording what the
+architecture was before, what it is now, and **why**. This is the file that
+explains choices a reader could not infer from the diff.
+
+**Maintained by:** Claude. Append a new entry per change — never rewrite or
+delete history. If a decision is later reversed, add a new entry that supersedes
+it and link back; leave the original in place.
+
+**Entry format:**
+
+```
+## [NNN] Short title
+**Date:** YYYY-MM-DD · **Milestone:** N · **Files:** a.py, b.py
+**Status:** proposed | implemented | superseded by [NNN] | reverted
+
+### Before
+What the code did, concretely.
+
+### After
+What it does now.
+
+### Why
+The reasoning. Include the failure mode being closed and the evidence for it.
+
+### Trade-offs / what this costs
+What got worse, what was deliberately not done, known limits.
+
+### Verification
+How we know it worked. Commands, metrics before/after, tests added.
+```
+
+---
+
+## [000] Baseline architecture as found
+
+**Date:** 2026-09-11 · **Milestone:** — · **Files:** all of `src/`
+**Status:** implemented (this is the starting point, not a change)
+
+Recorded before any work begins, so "previous architecture" has a fixed
+reference point once edits start.
+
+### Architecture as inherited
+
+Linear pipeline, each stage a module run as `python -m src.<name>`, passing
+state through parquet files in `data/` and artifacts in `models/`.
+
+```
+ingest.py          FastF1 -> data/raw_results.parquet, Gate 1 (manual spot-check)
+build_features.py  raw -> features_prefill.parquet -> features.parquet + fill_values.json
+audit_leakage.py   Gate 2, naive recompute vs pipeline, non-zero exit on fail
+train.py           LGBMClassifier, binary, P(top 10)     -> models/model.joblib
+train_rank.py      LGBMRanker, lambdarank, race groups   -> models/rank_model.joblib
+evaluate.py        Gate 3, classifier vs grid baseline
+evaluate_rank.py   ranker vs grid baseline (winner/podium/spearman)
+blend_rank.py      alpha sweep on validation             -> models/blend_alpha.json
+predict.py         appends placeholder rows, reruns pipeline, scores
+```
+
+Supporting modules: `columns.py` (single source of truth for `FEATURE_COLS`),
+`leakage.py` (the `shift(1)` helpers everything else routes through),
+`weather.py`, `circuit.py`, `teammate.py` (feature families),
+`make_synthetic.py` (test harness).
+
+### Design decisions worth preserving
+
+These are good and should survive the revamp:
+
+- **`columns.py` as a single source of truth.** One list defines what reaches
+  the model; everything else in the parquet is explicitly an identifier, label
+  or helper. Keep this property.
+- **`leakage.py` as a chokepoint.** All historical aggregation goes through
+  shared helpers that assert date-sortedness rather than silently re-sorting, so
+  an unsorted frame fails loudly instead of producing leaky features.
+- **`past_mean_excluding_current_race`.** A team has two rows per race, so a
+  plain `groupby().shift(1)` excludes only the current *row* — the second
+  driver's row would still see its teammate's same-race outcome. This helper
+  aggregates to one row per (team, race) and shifts at race level. The bug was
+  found by the audit, not by inspection, which is the argument for keeping the
+  audit in the loop for every new feature.
+- **`weather.py`'s strict-backward `merge_asof`.** For sparse subsets (wet
+  races, temp bins) a shifted subset stat goes stale for rows between subset
+  races. Computing the running stat including each subset race and exposing it
+  via `merge_asof(direction='backward', allow_exact_matches=False)` gets the
+  same exclusion guarantee without the staleness bug.
+- **`audit_leakage.py`'s independent recomputation.** Naive filter-and-loop
+  reimplementations that share no code with the pipeline. This is the right
+  shape for a leakage test — it just needs to cover more than historical
+  aggregation.
+- **Honest gates.** `evaluate.py` prints FAIL/NULL RESULT rather than hiding
+  behind AUC. Preserve that posture; extend it to exit non-zero.
+
+### Design decisions that must change
+
+Full evidence in `FIX_PLAN.md` §2; condensed in `HANDOVER.md` §4. Summary of
+the *reasoning*, which is what belongs here:
+
+1. **The forecast contract was never written down.** Features were audited for
+   "computable from prior races" but not for "available at the prediction
+   cutoff". Those are different guarantees, and the gap is exactly where the
+   race-weather leak lives: weather averaged over the race session passes the
+   first test and fails the second. Everything else in P0 follows from the same
+   missing contract.
+2. **Preprocessing state is fitted globally, not per split.** Fill values are
+   computed over the whole frame before the chronological split, so held-out
+   outcomes influence training inputs. Standard leakage; the audit did not look
+   for it because it only inspected feature *formulas*, not fitted state.
+3. **Two code paths compute features.** `build_features.build()` and
+   `predict.predict()` both assemble a feature vector, and they disagree — the
+   trainer uses a driver-prior fallback the server does not. Any two-path design
+   drifts; it needs to become one `build_asof_features(...)` call used by both.
+4. **Labels conflate distinct concepts.** `classified = notna(Position)` merges
+   "a result position exists" with "officially classified", so DNS and DSQ rows
+   claim classification. Downstream code then documents behaviour it does not
+   have (`train_rank` says DNFs get zero relevance; most retirements keep
+   position-based relevance).
+5. **Output is not deterministic.** `rank(method='first')` breaks ties by row
+   order, so shuffling input rows changes both predictions and metrics. A
+   forecast that depends on row order cannot be reproduced or audited.
+6. **The objective does not match the goal.** The blend selects alpha by
+   Spearman while the stated aim is winner and podium. `evaluate_rank.py` can
+   report PASS without improving winner accuracy at all.
+7. **The strongest available signal is discarded.** `quali_best_s` and
+   `gap_to_pole_s` are ingested, 98.9% populated, and excluded from
+   `FEATURE_COLS`. For a post-qualifying forecast this is the most obviously
+   informative input in the dataset.
+
+### Why the ordering is correctness-first
+
+The plan fixes contracts and the measurement harness before touching features or
+models. Reason: with race-session weather and globally-fitted fills in place,
+every benchmark number is measured on inputs that will not exist at prediction
+time. Adding a model to that pipeline compares candidates on unreal inputs and
+can reward the wrong behaviour. Correcting the pipeline first is also the only
+way to attribute a later gain to the model rather than to the leak.
+
+**Expect the metrics to drop after milestone 1.** That is the leak being removed,
+not a regression, and it must not be treated as a reason to revert.
+
+### Verification
+
+`FIX_PLAN.md` claims were checked against the artifacts on 2026-09-11:
+2,080 rows / 103 races / 2022-2026 confirmed; 303 `is_dnf & classified` rows
+confirmed (16 DNS, 10 Disqualified among them); `quali_best_s` 98.9% populated
+confirmed; saved alpha 0.6 confirmed. Recorded SHA-256 hashes are in
+`FIX_PLAN.md` appendix.
+
+---
+
+<!-- Append new entries above this line, newest last. -->
