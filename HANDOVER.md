@@ -7,7 +7,7 @@ Claude session and it should be able to continue without re-reading everything.
 any milestone lands. Keep it current, not comprehensive — detail lives in
 `REASONING.md` and `FIX_PLAN.md`.
 
-**Last updated:** 2026-09-11 — session 1 (milestones 0-6 done; all offline levers measured and exhausted)
+**Last updated:** 2026-09-11 — session 2 (three additional feature families measured; champion unchanged)
 
 ---
 
@@ -317,6 +317,9 @@ evidence FIX_PLAN.md section 8.6 requires and nothing else provides.
 | 5b | forecast scoring (`src/score_forecasts.py`) | closes the prospective loop; nothing to score until 2026 R14 runs |
 | 5c | in-fold hyperparameter tuning (`--tune`) | **NO EFFECT.** winner +0.0000; chosen leaves vary 7/31/7/31/15/7 across folds = selecting noise |
 | 6 | practice long-run pace (5 features, 184 races ingested) | **SIGNIFICANTLY WORSE.** winner -0.0787 [-0.1417, -0.0157], resolves. REMOVED from FEATURE_COLS, data retained |
+| 7a | recent driver/team field-normalised places gained | **NEGATIVE.** winner 0.6063 -> 0.5669; winner log loss 1.1469 -> 1.2067. Not added |
+| 7b | current teammate grid position | **INCONCLUSIVE.** ranker winner unchanged at 0.6063; log loss 1.1469 -> 1.1426 and podium Brier 0.07083 -> 0.06979, but intervals span zero. Not added |
+| 7c | same-weekend sprint finish and pace | **REJECTED.** 29 sprint races available. Combined winner 0.6063 -> 0.5748; log loss worsened by +0.0972 [+0.0167, +0.1796]. Individual features did not improve sprint-race ranking. Not added |
 
 Reproduce:
 
@@ -327,21 +330,26 @@ python -m src.gates    --backtest-dir reports/backtest_heads
 
 ### Next action
 
-**Every offline lever in FIX_PLAN.md has now been tried and measured.** Two
-worked; four did not:
+**Every offline lever in FIX_PLAN.md has now been tried and measured, plus
+three additional pre-race feature families in REASONING [016]-[017].** Two
+worked; six failed and one remains directionally useful but unresolved:
 
-| worked | failed |
+| worked | rejected or inconclusive |
 | --- | --- |
 | race pace + recency ratings (+0.039 winner) | qualifying pace (redundant with grid) |
 | fixing the early-stopping bug (+0.008) | specialist winner/podium heads (negative) |
 | | hyperparameter tuning (no effect) |
 | | practice long-run pace (significantly WORSE) |
+| | recent places gained (negative) |
+| | teammate current grid (unresolved; slight probability improvement) |
+| | same-weekend sprint result/pace (negative; only 29 events) |
 
 The pattern is consistent and is the single most useful thing this project has
 learned: **on 127 races, anything selected on a ~22-race validation block fits
 noise. Only genuinely new information or a removed defect survives.**
 
-That makes the remaining work almost entirely about evidence, not modelling.
+That makes the remaining work primarily about new information and prospective
+evidence, not further tuning of the same inputs.
 
 1. **Archive a forecast for every remaining 2026 race** (~9 left). After
    qualifying, before the race:
@@ -361,7 +369,14 @@ That makes the remaining work almost entirely about evidence, not modelling.
 
 3. **Not recommended on this data:** TabPFN, dynamic ratings, a custom neural
    model (FIX_PLAN.md section 7). It says 127 race groups cannot support them,
-   and four negative results here are consistent with that.
+   and the repeated negative or unresolved feature experiments are consistent
+   with that.
+
+4. **If acquiring another pre-race input, test in this order:** prior
+   start/lap-one performance; circuit overtaking and attrition context;
+   timestamped race-weather forecasts. Re-test current teammate grid and
+   same-weekend sprint data after materially more races. These are challengers,
+   not promised gains.
 
 Known gaps, none blocking:
 

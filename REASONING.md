@@ -1793,4 +1793,128 @@ evidence rather than running more offline experiments.
 
 ---
 
+## [016] Two race-conversion experiments: reject places gained; keep teammate grid as inconclusive
+
+**Date:** 2026-09-11
+
+The user asked for further pre-race feature experiments aimed at winner, podium,
+and top-10 accuracy. Both experiments were run in memory against the unchanged
+38-feature champion using the same six season folds and the same 127 test races.
+No experimental feature was added to tracked model code or artifacts.
+
+### A. Recent places gained — negative
+
+Two features measured field-normalised `grid_position - result_order`,
+conditional on finishing, using a six-race half-life:
+
+- driver conversion EWM;
+- team conversion EWM, excluding both current-race team rows.
+
+The conditioning deliberately left reliability to the existing reliability
+features. Both aggregates used only completed prior races.
+
+| ranker metric | experiment | champion | paired experiment minus champion |
+| --- | ---: | ---: | ---: |
+| winner accuracy | 0.5669 | 0.6063 | -0.0394 [-0.0945, +0.0157] |
+| podium overlap | 0.6745 | 0.6719 | +0.0026 [-0.0157, +0.0236] |
+| top-10 overlap | 0.7787 | 0.7811 | -0.0024 [-0.0126, +0.0071] |
+| Spearman, all | 0.6534 | 0.6487 | +0.0046 [-0.0028, +0.0123] |
+
+Winner log loss worsened from 1.1469 to 1.2067 and podium Brier worsened from
+0.07083 to 0.07200. The feature family is rejected. It overlaps conceptually
+with historical finish form and race pace while adding noisy strategy/incident
+effects.
+
+### B. Current teammate grid — directionally useful, unresolved
+
+One feature recorded the teammate's grid position for the current event. It is
+known at the forecast cutoff and gives the model car-strength context: pole with
+a teammate on the front row is different evidence from pole with a teammate in
+P15. A solo entry remains missing rather than receiving an invented value.
+
+| ranker metric | experiment | champion | paired experiment minus champion |
+| --- | ---: | ---: | ---: |
+| winner accuracy | 0.6063 | 0.6063 | 0.0000 [-0.0551, +0.0551] |
+| podium overlap | 0.6640 | 0.6719 | -0.0079 [-0.0315, +0.0131] |
+| top-10 overlap | 0.7858 | 0.7811 | +0.0047 [-0.0039, +0.0134] |
+| Spearman, all | 0.6550 | 0.6487 | +0.0063 [-0.0011, +0.0138] |
+
+Winner log loss improved slightly from 1.1469 to 1.1426 and podium Brier from
+0.07083 to 0.06979. The fold-selected blend reached 0.6142 winner accuracy, but
+podium overlap fell to 0.6640. None of the changes against the champion resolve.
+
+This feature stays an explicitly recorded challenger, not a shipped feature.
+Re-test it after materially more prospective races or as part of a predeclared
+team-grid-context experiment; do not promote it from this sample.
+
+### Decision
+
+The deployed champion remains unchanged. The next useful inputs must contain
+information absent from current grid and historical aggregate features. The
+best candidates are same-weekend sprint pace/results, prior start/lap-one skill,
+circuit overtaking/attrition context, and timestamped forecast weather. Each
+requires new source data or a careful new measurement, rather than another
+parameter sweep over the same table.
+
+Verification before these experiments: 267 tests passed with 12 warnings.
+
+---
+
+## [017] Same-weekend sprint result and pace — measured, not promoted
+
+**Date:** 2026-09-11
+
+The next pre-race input from [016] was tested. FastF1 sprint sessions were
+loaded for every sprint weekend present in the dataset: 29 events / 590 sprint
+entries from 2021 through the available 2026 races. Of those entries, 589
+matched a Grand Prix row and 574 had clean green-flag, non-pit sprint laps for
+the pace calculation. The features are valid at the forecast cutoff because
+the sprint ends before Grand Prix qualifying/race prediction.
+
+Three challengers used the unchanged six chronological season folds:
+
+1. field-normalised sprint finishing position;
+2. sprint median pace relative to the sprint field median;
+3. both features together.
+
+The 2021 and 2022 test folds contain sprint races but have no earlier sprint
+examples in their training partitions. This is correct chronological behavior,
+but leaves only 23 sprint races from 2023 onward where a fitted model could
+have learned the signal. Results therefore remain small-sample evidence.
+
+| ranker, all 127 races | winner | podium | top 10 | Spearman | winner log loss |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| champion | 0.6063 | 0.6719 | 0.7811 | 0.6487 | 1.1469 |
+| sprint finish only | 0.5827 | 0.6640 | 0.7850 | 0.6535 | 1.1159 |
+| sprint pace only | 0.5591 | 0.6772 | 0.7819 | 0.6559 | 1.1834 |
+| finish + pace | 0.5748 | 0.6562 | 0.7780 | 0.6501 | 1.2441 |
+
+The combined challenger worsened winner log loss by +0.0972
+[+0.0167, +0.1796] and podium Brier by +0.00381
+[+0.00074, +0.00683]; both intervals exclude zero. Its winner accuracy fell
+by 0.0315 [-0.0787, +0.0157]. It is rejected.
+
+Neither individual feature earns promotion. Sprint finish leaves winner and
+podium accuracy exactly unchanged on the 29 sprint races, while top-10 overlap
+falls 0.7690 -> 0.7655. Its encouraging winner log-loss change on sprint races
+is -0.1046 [-0.2470, +0.0521], unresolved. Sprint pace reduces sprint-race
+winner accuracy 0.4828 -> 0.4138 and top-10 overlap 0.7690 -> 0.7552. Across
+all races its small podium-overlap gain (+0.0052) comes with a winner-accuracy
+loss of -0.0472 [-0.1024, +0.0079].
+
+The raw data explains why the idea was plausible but insufficient. Mean
+within-race Spearman correlation with Grand Prix finishing order is 0.5757 for
+sprint pace, compared with 0.5991 for grid position. Sprint finishing order is
+weaker at 0.4810. The sprint adds a current-weekend observation, but the short
+race is still affected by its own grid, incidents, tyre choices, and track
+position; on this sample it does not add stable ranking information beyond the
+Grand Prix grid and existing prior-race pace ratings.
+
+No sprint feature was added to `FEATURE_COLS`, and the champion remains
+unchanged. Generated evidence is retained under
+`reports/experiments/sprint_*`; the extracted experimental data is
+`data/v2/sprint_experiment.parquet`.
+
+---
+
 <!-- Append new entries above this line, newest last. -->
