@@ -314,6 +314,8 @@ evidence FIX_PLAN.md section 8.6 requires and nothing else provides.
 | 4.1 | Plackett-Luce probabilities + temperature calibration | **PASSES 4 gates.** First gates ever passed |
 | 4.2 | specialist winner/podium heads | **NEGATIVE.** Weight selection overfits a ~22-race validation block; the 2 folds giving heads most weight got worse on test |
 | 5 | model bundle + calibrated forecast + archive | shipped; also fixed an early-stopping bug worth +0.008 winner accuracy |
+| 5b | forecast scoring (`src/score_forecasts.py`) | closes the prospective loop; nothing to score until 2026 R14 runs |
+| 5c | in-fold hyperparameter tuning (`--tune`) | **NO EFFECT.** winner +0.0000; chosen leaves vary 7/31/7/31/15/7 across folds = selecting noise |
 
 Reproduce:
 
@@ -324,34 +326,47 @@ python -m src.gates    --backtest-dir reports/backtest_heads
 
 ### Next action
 
-Milestones 0-5 are done. The pipeline is correct, measured, bundled and
-shipping forecasts. What remains is not a missing feature but missing evidence.
+**The offline levers are exhausted.** Three have been tried and measured with
+no gain -- current-weekend qualifying features [011], specialist winner/podium
+objectives [012], hyperparameter tuning [014]. Two produced gains: race pace
+plus fixing the blend objective [011b], and the early-stopping fix [013], which
+was worth more than every feature added in milestone 3.
 
-1. **Archive a forecast for every remaining 2026 race.** Roughly nine left.
-   `python -m src.predict --year 2026 --round N --from-quali --archive`, run
-   AFTER qualifying and BEFORE the race. Then a scoring script to compare the
-   archive against results as they arrive. This is the only evidence that
-   accumulates on its own.
-2. **In-fold hyperparameter tuning.** Never attempted: `fit_and_predict` uses
-   fixed PARAMS with only early stopping fitted per fold. FIX_PLAN.md section 6
-   proposes a bounded search (leaves 7/15/31, min leaf rows 20/40/80,
-   lambdarank truncation 4/6/10) on a fixed budget. Cheap, honest within the
-   existing harness, and the early-stopping bug suggests training is not yet
-   well configured.
-3. **Practice pace** (FIX_PLAN.md section 5.D): long-run stints, tyre-age
-   slope. The last untried source of genuinely new information, ~560 session
-   loads.
+The consistent pattern: on 127 races, anything selected on a ~22-race
+validation block fits noise. Only new information or a removed defect survives.
+
+So the remaining work is evidence, and one untried information source.
+
+1. **Archive a forecast for every remaining 2026 race** (~9 left). Run AFTER
+   qualifying, BEFORE the race:
+
+   ```
+   python -m src.predict --year 2026 --round N --from-quali --archive
+   python -m src.score_forecasts        # after results are ingested
+   ```
+
+   This is the only evidence that accumulates without further modelling, and
+   the only kind FIX_PLAN.md section 8.6 accepts as prospective validation.
+
+2. **Practice pace** (FIX_PLAN.md section 5.D): long-run stints, tyre-age
+   slope, stint consistency, excluding in/out and deleted laps. The last
+   untried source of genuinely NEW information, as opposed to a re-expression
+   of what grid position already encodes. ~560 session loads; mind the
+   500 calls/hour limit.
+
+3. Optional, low expected value on this sample: TabPFN (section 7), dynamic
+   ratings, a custom neural model. FIX_PLAN.md is explicit that 127 race groups
+   cannot support these, and three negative results here support that.
 
 Known gaps, none blocking:
 
 - `models/champion` keeps no previous champion for rollback (section 11).
-- Displayed order and probabilities can disagree row for row; permitted by
-  section 11 if stated, and it is stated, but worth unifying.
+- Displayed order and probabilities can disagree row for row; stated in the
+  output, but worth unifying.
 - Unexplained `p_top10` shift between two historical backtest runs; the
-  pipeline is verified deterministic now and the classifier is not the
-  champion. See REASONING [013].
-- Sprint-weekend handling, and the `sakhir` circuit_id collision (2020 Sakhir
-  GP outer layout shares an id with the Bahrain GP, 20 rows).
+  pipeline is verified deterministic and the classifier is not the champion.
+  See REASONING [013].
+- Sprint weekends; the `sakhir` circuit_id collision (20 rows).
 
 ## 8. Update protocol
 

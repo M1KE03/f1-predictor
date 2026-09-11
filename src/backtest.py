@@ -186,6 +186,51 @@ def make_folds(df: pd.DataFrame, scheme: str = ROLLING, **kwargs) -> list[Fold]:
     raise ValueError(f"Unknown fold scheme {scheme!r}; expected {SEASON!r} or {ROLLING!r}.")
 
 
+# Bounded hyperparameter search, run INSIDE each fold's validation block
+# (FIX_PLAN.md section 6: "a bounded search over leaves (7/15/31), minimum leaf
+# rows (20/40/80), and regularization is sufficient initially ... avoid
+# unrestricted searches on a tiny validation season").
+#
+# Nine configurations, not thirty: the validation block is ~22 races, and a
+# wider search on that sample selects noise. Selection is by validation
+# NDCG@3, the same primary metric that governs early stopping.
+TUNING_GRID: Final = tuple(
+    {"num_leaves": leaves, "min_child_samples": min_rows}
+    for leaves in (7, 15, 31)
+    for min_rows in (20, 40, 80)
+)
+
+
+def tune_ranker(train: pd.DataFrame, val: pd.DataFrame,
+                grid: tuple[dict, ...] = TUNING_GRID) -> tuple[dict, int, float]:
+    """Pick ranker hyperparameters on VALIDATION. Returns (params, iterations, score).
+
+    Never selects on the test block. Ties go to the FIRST configuration, which
+    is the smallest model in the grid -- where nothing separates two settings,
+    prefer the one less able to memorise.
+    """
+    import lightgbm as lgb
+
+    from .train_rank import PARAMS, group_sizes
+
+    best_params, best_iteration, best_score = dict(PARAMS), PARAMS["n_estimators"], -np.inf
+    for override in grid:
+        params = {**PARAMS, **override}
+        model = lgb.LGBMRanker(**params)
+        model.fit(train[FEATURE_COLS], train["relevance"], group=group_sizes(train),
+                  eval_set=[(val[FEATURE_COLS], val["relevance"])],
+                  eval_group=[group_sizes(val)], eval_at=[3, 1, 10],
+                  callbacks=[lgb.early_stopping(100, first_metric_only=True,
+                                                verbose=False),
+                             lgb.log_evaluation(0)])
+        score = float(model.best_score_["valid_0"]["ndcg@3"])
+        if score > best_score:
+            best_score = score
+            best_params = params
+            best_iteration = int(model.best_iteration_ or params["n_estimators"])
+    return best_params, best_iteration, best_score
+
+
 # Blend weights swept inside each fold. 0 = ranker only, 1 = grid only.
 ALPHA_GRID: Final = tuple(round(a, 2) for a in np.arange(0.0, 1.01, 0.1))
 
@@ -225,7 +270,8 @@ def select_alpha(val: pd.DataFrame,
 # ---------------------------------------------------------------------------
 def fit_and_predict(prefill: pd.DataFrame, fold: Fold,
                     params: dict | None = None,
-                    rank_params: dict | None = None) -> pd.DataFrame:
+                    rank_params: dict | None = None,
+                    tune: bool = False) -> pd.DataFrame:
     """Refit the policy and both models on `fold.train`, score `fold.test`.
 
     `prefill` must be the PRE-IMPUTATION frame: the policy is fitted inside the
@@ -251,7 +297,12 @@ def fit_and_predict(prefill: pd.DataFrame, fold: Fold,
             callbacks=[lgb.early_stopping(100, verbose=False),
                        lgb.log_evaluation(0)])
 
-    ranker = lgb.LGBMRanker(**{**RANK_PARAMS, **(rank_params or {})})
+    if tune:
+        tuned_params, _, _ = tune_ranker(train, val)
+    else:
+        tuned_params = {**RANK_PARAMS, **(rank_params or {})}
+
+    ranker = lgb.LGBMRanker(**tuned_params)
     ranker.fit(train[FEATURE_COLS], train["relevance"], group=group_sizes(train),
                eval_set=[(val[FEATURE_COLS], val["relevance"])],
                eval_group=[group_sizes(val)], eval_at=[3, 1, 10],
@@ -343,17 +394,20 @@ def fit_and_predict(prefill: pd.DataFrame, fold: Fold,
     out.attrs["alpha"] = alpha
     out.attrs["best_iteration"] = {"classifier": clf.best_iteration_,
                                    "ranker": ranker.best_iteration_}
+    out.attrs["ranker_params"] = {k: tuned_params[k]
+                                  for k in ("num_leaves", "min_child_samples")}
     return out
 
 
-def run(prefill: pd.DataFrame, folds: list[Fold]) -> tuple[pd.DataFrame, list[dict]]:
+def run(prefill: pd.DataFrame, folds: list[Fold],
+        tune: bool = False) -> tuple[pd.DataFrame, list[dict]]:
     """Score every fold. Returns pooled predictions and the fold manifests."""
     frames, manifests = [], []
     for fold in folds:
         log.info("fold %s: train=%s races, val=%s, test=%s",
                  fold.name, fold.manifest["n_races"]["train"],
                  fold.manifest["n_races"]["val"], fold.manifest["n_races"]["test"])
-        predictions = fit_and_predict(prefill, fold)
+        predictions = fit_and_predict(prefill, fold, tune=tune)
         manifests.append({**fold.manifest,
                           "alpha": predictions.attrs["alpha"],
                           "temperature": float(predictions["temperature"].iloc[0]),
@@ -361,6 +415,7 @@ def run(prefill: pd.DataFrame, folds: list[Fold]) -> tuple[pd.DataFrame, list[di
                               "winner": float(predictions["w_winner_head"].iloc[0]),
                               "podium": float(predictions["w_podium_head"].iloc[0])},
                           "best_iteration": predictions.attrs["best_iteration"],
+                          "ranker_params": predictions.attrs["ranker_params"],
                           "fitted_constants": predictions.attrs["policy"]})
         frames.append(predictions)
     return pd.concat(frames, ignore_index=True), manifests
@@ -374,6 +429,9 @@ def main() -> None:
                         default=DATA_DIR / "v2" / "features_prefill.parquet",
                         help="PRE-imputation frame; the policy is refitted per fold")
     parser.add_argument("--scheme", choices=[SEASON, ROLLING], default=ROLLING)
+    parser.add_argument("--tune", action="store_true",
+                        help="bounded hyperparameter search inside each "
+                             "fold's validation block (9 configurations)")
     parser.add_argument("--train-from", type=int, default=None,
                         help="earliest season allowed in TRAINING. Test and "
                              "validation seasons are unchanged, so two runs "
@@ -399,7 +457,7 @@ def main() -> None:
             "No folds could be built. There is not enough history for the "
             "requested scheme; lower --min-train-races or re-ingest earlier seasons.")
 
-    predictions, manifests = run(prefill, folds)
+    predictions, manifests = run(prefill, folds, tune=args.tune)
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     predictions.to_parquet(args.out_dir / "predictions.parquet", index=False)

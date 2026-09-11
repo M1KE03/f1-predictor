@@ -1590,4 +1590,94 @@ PROVISIONAL with its caveats printed, archived to `reports/forecasts/2026-14.jso
 
 ---
 
+## [014] Forecast scoring, and hyperparameter tuning (negative)
+
+**Date:** 2026-09-11 - **Milestone:** 5 follow-up - **Files:**
+`src/score_forecasts.py` (new), `src/backtest.py`,
+`tests/test_score_forecasts.py` (new)
+**Status:** implemented; tuning result NEGATIVE
+
+### Forecast scoring closes the prospective loop
+
+`src/score_forecasts.py` reads the archived forecast records, scores each one
+whose result has arrived, and accumulates the total.
+
+The design point: **it re-derives nothing**. The prediction, the probabilities
+and the grid baseline all come from the archived JSON, never from a fresh model
+run. A forecast that can be re-scored with a newer model is not evidence of
+anything, and a test pins it -- winner log loss must equal `-log(archived
+p_win)`, not a recomputed value.
+
+It also refuses to overstate: under 20 races it prints how much one race moves
+winner accuracy and calls itself "a record being built, not a result".
+
+Currently 1 archived forecast (2026 R14), 0 scored, because that race has not
+run. That is the correct output, not a failure.
+
+### Hyperparameter tuning: no effect
+
+FIX_PLAN.md section 6 asks for a bounded search over leaves (7/15/31) and
+minimum leaf rows (20/40/80), and warns against "unrestricted searches on a
+tiny validation season". Nine configurations were used rather than the thirty
+it permits, selected on validation NDCG@3 inside each fold, with ties going to
+the smallest model.
+
+Paired against the untuned ranker on the same 127 races:
+
+| metric | tuned minus untuned |
+| --- | --- |
+| winner accuracy | **+0.0000** [-0.0551, +0.0551] |
+| podium overlap | -0.0000 [-0.0210, +0.0210] |
+| top-10 overlap | +0.0008 [-0.0087, +0.0110] |
+| spearman | +0.0015 [-0.0079, +0.0106] |
+| winner log loss | 1.1469 -> 1.1475 (marginally worse) |
+
+Nothing resolves; nothing moves.
+
+**The chosen parameters are the finding.** Leaves selected per fold: 7, 31, 7,
+31, 15, 7. The search picks a different model size almost every fold, which is
+what selecting on a ~22-race validation block looks like when nothing genuinely
+separates the configurations. The same shape as the specialist-head failure in
+[012]: the mechanism is sound, the sample is not large enough to exploit it.
+
+A prediction was recorded before running this -- "a small gain in ordering, and
+winner accuracy staying within noise of 0.6063" -- and it held.
+
+### What this closes off
+
+Three offline levers have now been tried and measured: better current-weekend
+features (3.1, no gain), specialist objectives (4.2, negative), and
+hyperparameter tuning (here, no gain). One worked: genuinely new information
+in the form of race pace, plus fixing the blend objective (3.2). One structural
+bug mattered more than any of them: the early-stopping misconfiguration in
+[013] was worth more winner accuracy than every feature added in milestone 3.
+
+The pattern across all of them is consistent. On 127 races, anything selected
+on a ~22-race validation block fits noise; only changes that add information or
+remove a defect survive.
+
+### Trade-offs / what this costs
+
+- `--tune` is opt-in and OFF by default, since it costs nine times the training
+  time for no measured benefit. It is kept because it will be worth re-running
+  once more seasons exist, and because "we tried it and it did nothing" is only
+  credible if the code is still there to re-run.
+- The tuning grid is narrower than FIX_PLAN.md permits (9 of 30 configurations,
+  no regularisation axis, no LambdaRank truncation levels). Widening it on this
+  sample would select more noise, not less.
+- Forecast scoring cannot be exercised end to end yet; the tests use
+  constructed records instead.
+
+### Verification
+
+- 253 tests (10 new in `tests/test_score_forecasts.py`).
+- Scoring asserted to read the archived probability, not recompute it, in both
+  the correct-winner and wrong-winner cases.
+- The grid baseline is scored from the same archived record, so the comparison
+  is exactly what was knowable at forecast time.
+- A driver missing from the result is reported as `drivers_unmatched`, not
+  silently dropped, so an entry-list change after the forecast stays visible.
+
+---
+
 <!-- Append new entries above this line, newest last. -->
