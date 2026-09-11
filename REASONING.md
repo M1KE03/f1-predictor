@@ -1347,4 +1347,143 @@ gap. What remains untried:
 
 ---
 
+## [012] Calibrated race probabilities (PASS) and specialist heads (FAIL)
+
+**Date:** 2026-09-11 - **Milestone:** 4 - **Files:**
+`src/probabilities.py` (new), `src/heads.py` (new), `src/backtest.py`,
+`src/gates.py`, `tests/test_probabilities.py` (new), `tests/test_backtest.py`
+**Status:** 4.1 implemented and PASSING; 4.2 implemented, result NEGATIVE
+
+### 4.1 Probabilities -- the first gate this project has passed
+
+Every model produced an ORDER. An order cannot say how likely a win is, cannot
+be scored by log loss or Brier, and cannot distinguish a near-certain race from
+a coin toss. Two promotion gates had therefore never been scored.
+
+`src/probabilities.py` fits a Plackett-Luce distribution over finishing orders:
+`P(win_i) = softmax(s_i / T)`, subsequent positions drawn from the same form
+without replacement. Win, podium and top-10 come from ONE distribution, so they
+are coherent by construction. Sampling uses Gumbel-max, which is exact for
+Plackett-Luce rather than an approximation.
+
+Result over 127 races:
+
+| | winner log loss | podium Brier |
+| --- | ---: | ---: |
+| uniform floor | 3.0047 | - |
+| probabilistic grid baseline | 1.6569 | 0.0711 |
+| **ranker (Plackett-Luce)** | **1.1722** | **0.0708** |
+
+Paired per race, ranker minus grid: **-0.4847 [-0.8359, -0.2114], RESOLVES.**
+All four probability checks pass.
+
+**This is a genuinely different answer from every ranking metric, and it
+resolves a puzzle.** Winner accuracy is argmax: it only sees whether the top
+pick was right. Log loss sees the whole distribution. The ranker knows
+meaningfully more about who will win than grid position does -- it just does
+not convert that into *choosing* a different winner often enough to move
+accuracy. Calibration supports this: the favourite's mean `p_win` is 0.548
+against an actual win rate of 0.598 (slightly underconfident), while the grid
+baseline reads 0.431 against 0.559.
+
+Design points worth keeping:
+
+- **Temperature is fitted per fold on VALIDATION.** It changes confidence
+  without changing order, so fitting it on the test block would flatter every
+  probability metric while leaving every ranking metric untouched.
+- **The comparison is against a PROBABILISTIC grid baseline** -- a
+  one-parameter grid-utility distribution with its own fitted temperature -
+  because a deterministic order has no win probabilities to be better than
+  (FIX_PLAN.md section 8).
+- `coherence_report` catches the shortcut section 6 forbids; a test feeds it
+  three independently normalised outputs and asserts it complains.
+
+### 4.2 Specialist heads -- negative
+
+A binary head on `is_winner` and another on `is_podium`, combined with the
+ranker as standardised utilities through the SAME Plackett-Luce layer (never by
+normalising three classifier outputs), weights selected on validation by winner
+log loss.
+
+| | winner | podium | spearman | winner log loss |
+| --- | ---: | ---: | ---: | ---: |
+| grid_baseline | 0.5591 | 0.6693 | 0.6305 | 1.6569 |
+| rank_model | **0.5984** | 0.6693 | **0.6520** | **1.1722** |
+| ensemble | 0.5827 | 0.6719 | 0.6393 | 1.1890 |
+
+Ensemble minus ranker: winner -0.0157 [-0.0551, +0.0236]; spearman -0.0127
+[-0.0197, -0.0061] **resolves WORSE**.
+
+**The mechanism is visible in the per-fold weights**, which is why this is a
+useful failure rather than just a null:
+
+| season | w_winner | w_podium | ranker | ensemble | delta |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 2021 | 0.00 | 0.25 | 0.5455 | 0.5909 | +0.0455 |
+| 2022 | 0.00 | 0.00 | 0.3636 | 0.3636 | 0.0000 |
+| 2023 | 0.00 | 0.00 | 0.9091 | 0.9091 | 0.0000 |
+| 2024 | 1.00 | 0.00 | 0.5417 | 0.5000 | -0.0417 |
+| 2025 | 0.75 | 1.00 | 0.5833 | 0.5000 | -0.0833 |
+| 2026 | 0.00 | 1.00 | 0.6923 | 0.6923 | 0.0000 |
+
+The two folds that gave the heads the most weight (2024, 2025) are exactly the
+two folds that got WORSE on test. Three of six folds set the winner head to
+zero. **The weight selection is fitting noise on a ~22-race validation block**,
+and the heads themselves train on roughly 125 positive examples. The objective
+was right; the sample is not big enough to exploit it.
+
+Note this is the opposite outcome to the alpha fix in [011], which used the same
+mechanism -- select on validation against the real objective -- and worked.
+The difference is dimensionality: alpha is one parameter on a coarse grid, the
+ensemble is two more on top of it.
+
+### Trade-offs / what this costs
+
+- **The ensemble should NOT be the shipped configuration.** Ranker plus the
+  Plackett-Luce layer is the best thing measured so far. The head code stays as
+  a tested challenger, which is exactly the status FIX_PLAN.md section 6
+  assigns it ("specialist binary winner/podium models remain challenger signals
+  until calibrated and combined into a coherent race-level output").
+- **Backtest runtime roughly doubled** -- two extra models per fold plus a 25
+  point weight sweep, each combination refitting a temperature.
+- **Temperatures are small (0.05-0.38) and one fold hit the grid floor.** The
+  search is truncated there, so that fold's temperature is a bound rather than
+  an optimum. Worth widening if probability work continues.
+- Weight selection uses winner log loss, not winner accuracy. Deliberate:
+  accuracy on ~22 races moves in 4.5-point steps, far too coarse to tune three
+  weights on. Documented at the call site so it is not mistaken for the same
+  objective slip [011] fixed.
+
+### Verification
+
+- 232 tests (21 new in `tests/test_probabilities.py`).
+- Gumbel-max asserted exact: sampled first-place rate converges on the
+  closed-form softmax to 0.01 over 40,000 draws.
+- Coherence holds on all 127 backtest races, 0 problems.
+- A test constructs three independently normalised outputs and asserts
+  `coherence_report` rejects them.
+- Temperature fitting asserted in both directions: sharpens when the favourite
+  always wins, flattens when the favourite never wins.
+- The obsolete test asserting probability gates were "unavailable" was replaced
+  by two: one that they report unavailability when probabilities are absent,
+  one that they score when present.
+
+### Where the gates now stand
+
+| gate | status |
+| --- | --- |
+| winner accuracy +0.05 | FAIL (+0.0394, spans zero) |
+| podium overlap +0.03 | FAIL (+0.0000) |
+| top-10 / spearman guardrails | PASS |
+| 3+ folds, 60+ races | PASS |
+| **winner log loss beats grid** | **PASS, resolves** |
+| **podium Brier** | **PASS** |
+| **coherence** | **PASS** |
+| **uniform floor** | **PASS** |
+
+Still DO NOT PROMOTE, but the failure is now narrow and specific: the model is
+better at ESTIMATING who wins and no better at CHOOSING differently.
+
+---
+
 <!-- Append new entries above this line, newest last. -->

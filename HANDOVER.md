@@ -7,7 +7,7 @@ Claude session and it should be able to continue without re-reading everything.
 any milestone lands. Keep it current, not comprehensive — detail lives in
 `REASONING.md` and `FIX_PLAN.md`.
 
-**Last updated:** 2026-09-11 — session 1 (milestones 0-2 complete; 3.1 done, NEGATIVE result)
+**Last updated:** 2026-09-11 — session 1 (milestones 0-2 complete; 3.1-3.2, 4.1-4.2 done)
 
 ---
 
@@ -128,8 +128,8 @@ fitted imputation state, or serving parity.
 | 0 | Preserve & reproduce: baseline.json, manifest, dep lock, README refresh | **0.1 DONE** (README refresh deferred to M1) |
 | 1 | Correct contracts & replay: weather, fitted state, labels, shared as-of path, deterministic ties | **DONE** (1.1-1.7). All five P0 defects closed |
 | 2 | Evaluation harness: `backtest.py`, `metrics.py`, real winner gates | **DONE** - 8 folds / 47 races; gates exit non-zero |
-| 3 | Qualifying & car features: `qualifying.py`, `ratings.py` | **3.1 DONE, no gain** (see below); ratings/recency pending |
-| 4 | Model comparison M0-M4 (+ Plackett-Luce, winner/podium heads) | NOT STARTED |
+| 3 | Qualifying & car features: `qualifying.py`, `ratings.py` | **DONE**. 3.1 quali pace: no gain. 3.2 race pace + alpha fix: best result so far |
+| 4 | Model comparison M0-M4 (+ Plackett-Luce, winner/podium heads) | **4.1 DONE, PASSES** (probabilities); **4.2 DONE, negative** (heads) |
 | 5 | Validated forecast output with model bundle + probabilities | NOT STARTED |
 | 6 | Optional: practice pace, forecast archive, TabPFN, custom NN | NOT STARTED |
 
@@ -272,55 +272,87 @@ python -m src.gates --backtest-dir reports/backtest_season
    FIX_PLAN.md says yes - without paired intervals over multiple folds, an
    11-race test season cannot tell whether a new feature helped.
 
-### Increment 3.1 result: qualifying pace does NOT help
+### CURRENT BEST CONFIGURATION
 
-Seven per-segment qualifying-pace features added (22 -> 29 features). On the
-same 127 races, paired:
+**Ranker (38 features) + Plackett-Luce probability layer.** NOT the ensemble.
 
-- blend winner **+0.0000** [-0.0394, +0.0394]
-- rank_model winner **+0.0000** [-0.0551, +0.0551]
-- nothing resolves; blend podium and spearman are marginally WORSE
-- 2026 specifically: blend 10/13 winners -> 9/13
+Pooled over 6 season folds / 127 races (2018-2026):
 
-The model uses them heavily - 38.6% of ranker gain, with
-`quali_gap_to_median_pct` second overall at 31.3% - but outcomes do not move.
-Diagnosed:
+| method | winner | podium | top-10 | spearman | winner log loss |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| grid_baseline | 0.5591 | 0.6693 | 0.7701 | 0.6305 | 1.6569 |
+| **rank_model** | **0.5984** | 0.6693 | **0.7811** | **0.6520** | **1.1722** |
+| blend (per-fold alpha) | 0.5984 | 0.6693 | 0.7787 | 0.6582 | - |
+| ensemble (+ heads) | 0.5827 | 0.6719 | 0.7772 | 0.6393 | 1.1890 |
+| uniform floor | - | - | - | - | 3.0047 |
 
-    corr(grid_position, result_order)  = 0.627
-    corr(quali_gap_pct, result_order)  = 0.496
-    corr(grid_position, quali_gap_pct) = 0.658
+Gate status:
 
-`grid_position` IS the qualifying result with penalties applied, it is the
-better predictor, and the new features are 0.66-correlated with it. They are
-**substitutes, not complements**. The finding: **the MAGNITUDE of a qualifying
-gap does not predict race result beyond qualifying ORDER.**
+| gate | status |
+| --- | --- |
+| winner accuracy +0.05 | FAIL (+0.0394 [-0.0394, +0.1181]) |
+| podium overlap +0.03 | FAIL (+0.0000) |
+| top-10 / spearman guardrails | PASS (spearman resolves) |
+| 3+ folds, 60+ races | PASS |
+| **winner log loss beats grid** | **PASS, resolves (-0.4847)** |
+| **podium Brier / coherence / uniform floor** | **PASS** |
 
-Keep the features (leakage-free, may combine with race-pace features later) but
-do not call them an improvement. `quali_stage_reached` and `quali_no_time`
-contribute 0.00% gain and are removal candidates.
+**The key insight from 4.1:** the ranker is significantly better than grid at
+ESTIMATING who wins (log loss resolves) but not at CHOOSING differently
+(accuracy does not). Winner accuracy is argmax and only sees the top pick; log
+loss sees the whole distribution. Calibration: favourite's mean p_win 0.548 vs
+a 0.598 actual win rate.
+
+### Experiment log (what worked and what did not)
+
+| increment | change | result |
+| --- | --- | --- |
+| 3.1 | per-segment qualifying pace (7 features) | **NO GAIN.** Takes 38.6% of ranker gain but grid_position IS the qualifying order; they are substitutes (corr 0.66) |
+| 3.2a | race pace from green-flag laps + recency-weighted ratings (9 features) | ranker winner 0.5591 -> 0.5984, best so far |
+| 3.2b | alpha selected per fold by winner objective | recovered the gain into the blend; Spearman-selected alpha was costing 4pp |
+| 4.1 | Plackett-Luce probabilities + temperature calibration | **PASSES 4 gates.** First gates ever passed |
+| 4.2 | specialist winner/podium heads | **NEGATIVE.** Weight selection overfits a ~22-race validation block; the 2 folds giving heads most weight got worse on test |
+
+Reproduce:
+
+```
+python -m src.backtest --scheme season --out-dir reports/backtest_heads
+python -m src.gates    --backtest-dir reports/backtest_heads
+```
 
 ### Next action
 
-FIX_PLAN.md nominated unused qualifying pace as the most obvious missing
-signal. It has now been added properly and is not the answer. The gap between
-the models and the grid baseline is NOT a qualifying-information gap.
+The binding constraint is now EVIDENCE, not ideas. Winner accuracy sits at
++0.0394 [-0.0394, +0.1181] against a +0.05 gate: the gate is plausible but
+unproven, and the interval is too wide to resolve on 127 races.
 
-What remains untried, in order of expected value:
+Options, in order of expected value:
 
-1. **Race pace.** Nothing in the feature set measures how fast a car is over a
-   stint, only where it started and where it historically finished. Practice
-   long-run stints are the natural source (FIX_PLAN.md section 5.D: robust
-   long-run lap pace, stint consistency, tyre-age slope, excluding in/out and
-   deleted laps). This needs new ingestion.
-2. **Recency-weighted car form** (section 5.C). `constructor_standing_prior` is
-   cumulative season points - lagging, badly scaled, and it omits sprint points.
-   Exponentially weighted recent team pace is the prescribed replacement.
-3. **Specialist winner/podium objectives** (section 6, M4). Every current model
-   optimises a top-10 flag or full-field order; none optimises the thing being
-   measured. The blend's alpha is still selected by Spearman.
+1. **Milestone 5: ship what works.** Ranker + Plackett-Luce is the best
+   measured configuration and already passes every probability gate. Bundle it
+   (model + feature schema + fitted policy + temperature + split manifest +
+   data hash), wire `predict.py` to emit calibrated win/podium/top-10
+   probabilities, and start archiving timestamped forecasts. FIX_PLAN.md
+   section 8 point 6 is explicit that prospective evidence -- forecasts frozen
+   BEFORE outcomes -- is what the project ultimately needs, and none is being
+   collected.
+2. **Practice pace** (FIX_PLAN.md section 5.D): long-run stints, tyre-age
+   slope, stint consistency. The only untried source of genuinely new
+   information. Needs ~560 more session loads.
+3. **Hyperparameter tuning inside folds.** Never done: `fit_and_predict` uses
+   fixed PARAMS with only early stopping fitted per fold. Cheap, and honest
+   within the existing harness.
 
-Note the backtest harness makes each of these a one-command measurement, which
-is what milestone 2 was for.
+Recommendation: 1, then 3, then 2. The project can now measure honestly but has
+never produced a usable forecast artifact, and every offline gain is bounded by
+a sample size that only time fixes.
+
+Caveats that must travel with any result:
+
+- 2026 is 13 races; grid winner accuracy there is 0.6923 vs 0.5591 pooled, so
+  that season is unusually grid-predictable.
+- Temperatures are small (0.05-0.38) and one fold hit the search floor.
+- The ensemble is a challenger, not the champion. Do not ship it.
 
 ## 8. Update protocol
 

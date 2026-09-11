@@ -46,6 +46,8 @@ import pandas as pd
 from .blend_rank import add_blended_score
 from .columns import FEATURE_COLS, TARGET
 from .metrics import ensure_labels
+from .heads import (combine, fit_heads, head_utility, select_weights,
+                    standardise_within_race)
 from .preprocessing import FillPolicy
 from .probabilities import add_probabilities, fit_temperature
 
@@ -273,14 +275,48 @@ def fit_and_predict(prefill: pd.DataFrame, fold: Fold,
     out["alpha"] = alpha
     out["blend_score"] = add_blended_score(out, "rank_score", alpha)
 
+    # --- specialist winner/podium heads (FIX_PLAN.md section 6, M4) --------
+    # Trained on the same fold's training rows; their weights are selected on
+    # the VALIDATION block, so the meta-decision never sees the base models'
+    # in-sample predictions.
+    heads = fit_heads(train, val, FEATURE_COLS)
+
+    def components(frame: pd.DataFrame, rank_scores: np.ndarray) -> dict:
+        return {
+            "ranker": standardise_within_race(rank_scores, frame),
+            "winner_head": standardise_within_race(
+                head_utility(heads["winner_head"], frame, FEATURE_COLS), frame),
+            "podium_head": standardise_within_race(
+                head_utility(heads["podium_head"], frame, FEATURE_COLS), frame),
+        }
+
+    val_scores = ranker.predict(val[FEATURE_COLS])
+    weights = select_weights(val, components(val, val_scores))
+    test_components = components(test, out["rank_score"].to_numpy())
+    out["ensemble_score"] = combine(test_components, weights)
+    out["p_winner_head"] = heads["winner_head"].predict_proba(test[FEATURE_COLS])[:, 1]
+    out["p_podium_head"] = heads["podium_head"].predict_proba(test[FEATURE_COLS])[:, 1]
+
     # Race-level probabilities. The temperature is fitted on THIS fold's
     # validation block: it changes confidence without changing order, so
     # fitting it on the test block would flatter every probability metric while
     # leaving the ranking metrics untouched -- an easy leak to miss.
-    temperature = fit_temperature(
-        val.assign(rank_score=ranker.predict(val[FEATURE_COLS])), "rank_score")
+    temperature = fit_temperature(val.assign(rank_score=val_scores), "rank_score")
     out["temperature"] = temperature
     out = add_probabilities(out, "rank_score", temperature)
+
+    # The ensemble runs through the SAME Plackett-Luce layer, with its own
+    # temperature, so its win/podium/top-10 probabilities stay coherent rather
+    # than being three independently normalised classifier outputs.
+    ens_temperature = fit_temperature(
+        val.assign(_e=combine(components(val, val_scores), weights)), "_e")
+    ens = add_probabilities(out.assign(_e=out["ensemble_score"]), "_e",
+                            ens_temperature)
+    for column in ("p_win", "p_podium", "p_top10"):
+        out[f"{column}_ens"] = ens[column].to_numpy()
+    out["ensemble_temperature"] = ens_temperature
+    out["w_winner_head"] = weights["winner_head"]
+    out["w_podium_head"] = weights["podium_head"]
 
     # A probabilistic GRID baseline. A deterministic order has no win
     # probabilities of its own, so "better winner log loss" needs something to
@@ -314,6 +350,9 @@ def run(prefill: pd.DataFrame, folds: list[Fold]) -> tuple[pd.DataFrame, list[di
         manifests.append({**fold.manifest,
                           "alpha": predictions.attrs["alpha"],
                           "temperature": float(predictions["temperature"].iloc[0]),
+                          "head_weights": {
+                              "winner": float(predictions["w_winner_head"].iloc[0]),
+                              "podium": float(predictions["w_podium_head"].iloc[0])},
                           "best_iteration": predictions.attrs["best_iteration"],
                           "fitted_constants": predictions.attrs["policy"]})
         frames.append(predictions)
