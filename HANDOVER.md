@@ -7,7 +7,7 @@ Claude session and it should be able to continue without re-reading everything.
 any milestone lands. Keep it current, not comprehensive — detail lives in
 `REASONING.md` and `FIX_PLAN.md`.
 
-**Last updated:** 2026-09-11 — session 1 (increments 0.1, 1.1-1.7 done; MILESTONE 1 COMPLETE)
+**Last updated:** 2026-09-11 — session 1 (milestones 0, 1 and 2 complete)
 
 ---
 
@@ -128,7 +128,7 @@ fitted imputation state, or serving parity.
 | --- | --- | --- |
 | 0 | Preserve & reproduce: baseline.json, manifest, dep lock, README refresh | **0.1 DONE** (README refresh deferred to M1) |
 | 1 | Correct contracts & replay: weather, fitted state, labels, shared as-of path, deterministic ties | **DONE** (1.1-1.7). All five P0 defects closed |
-| 2 | Evaluation harness: `backtest.py`, `metrics.py`, real winner gates | NOT STARTED |
+| 2 | Evaluation harness: `backtest.py`, `metrics.py`, real winner gates | **DONE** - 8 folds / 47 races; gates exit non-zero |
 | 3 | Qualifying & car features: `qualifying.py`, `ratings.py` | NOT STARTED |
 | 4 | Model comparison M0-M4 (+ Plackett-Luce, winner/podium heads) | NOT STARTED |
 | 5 | Validated forecast output with model bundle + probabilities | NOT STARTED |
@@ -174,9 +174,13 @@ committed by Claude - the user runs all git commands.
 | 1.5+1.6 | `preprocessing.FillPolicy` fitted on train only; `features.build_asof_features()` as the single path; README rewritten | ranker/blend Spearman **down**; classifier still up |
 | 1.7 | `src/grid.py` - qualifying vs grid separated, explicit pit starts, real field size, grid status | none (no retrain needed) |
 
-**Milestone 1 is complete: all five P0 defects are closed.**
+**Milestones 0, 1 and 2 are complete.**
 
-Test suite: **124 tests**, `python -m pytest`. The repo had none before 1.1.
+| # | What | Effect |
+| --- | --- | --- |
+| 2 | `src/backtest.py` expanding-window folds + `src/gates.py` paired intervals | **changed the headline finding - see below** |
+
+Test suite: **149 tests**, `python -m pytest`.
 
 ### Artifact layout (IMPORTANT)
 
@@ -189,25 +193,38 @@ Test suite: **124 tests**, `python -m pytest`. The repo had none before 1.1.
 
 Full rebuild command sequence is in `README.md`.
 
-### Corrected metrics, held-out 2026 (11 races, alpha=0.5)
+### THE HEADLINE FINDING (changed by milestone 2)
 
-| Method | Winner | Podium | Top-10 | Spearman (all) | Spearman (finishers) |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| grid_baseline | 0.7273 | 0.5758 | 0.7364 | 0.6432 | 0.8450 |
-| top10_classifier | 0.1818 | 0.4242 | 0.7636 | 0.5812 | 0.7856 |
-| rank_model | 0.5455 | 0.6061 | 0.7182 | 0.4949 | 0.7296 |
-| blend (a=0.5) | 0.7273 | 0.5758 | 0.7364 | 0.6055 | 0.8101 |
+Backtested over **8 folds / 47 races**, paired against the grid baseline with
+95% intervals from 10,000 race-level bootstrap resamples:
 
-**Winner accuracy has not moved through any correction: 8/11 for both grid and
-blend.** The blend still picks exactly the grid's winners. That is the problem
-milestones 2-4 exist to attack; milestone 1 was never going to fix it.
+| candidate | winner accuracy vs grid | resolves? |
+| --- | ---: | --- |
+| blend | **-0.0851** [-0.1702, -0.0213] | YES |
+| rank_model | **-0.2128** [-0.3404, -0.0851] | YES |
+| top10_classifier | **-0.4468** [-0.6383, -0.2553] | YES |
 
-Two caveats that must travel with these numbers:
+Pooled winner accuracy: grid **0.6170**, blend 0.5319, rank_model 0.4043,
+classifier 0.1702.
 
-1. **11 races. One race = 9.1pp of winner accuracy.** Nothing here is
-   significant (FIX_PLAN.md section 8).
-2. `rank_model`'s Spearman partly reflects the tie-break, not the model: 32% of
-   its rows are tied and fall back to grid order.
+**The models are not merely no better than the grid - they are significantly
+WORSE at picking winners.** The single 11-race season showed the blend tying
+grid at 8/11, which read as "adds nothing". Over 47 races the sign resolves and
+the interval excludes zero. That tie was a small-sample artefact.
+
+The blend does buy better ordering: spearman +0.0184 [+0.0040, +0.0333]
+(resolves), podium +0.0142 [-0.0213, +0.0496] (does not). It trades winner
+accuracy for Spearman - exactly the objective mismatch FIX_PLAN.md flags as P1,
+since alpha is SELECTED by Spearman.
+
+`python -m src.gates` exits 1. No candidate passes.
+
+Reproduce:
+
+```
+python -m src.backtest --scheme rolling
+python -m src.gates
+```
 
 ### Guards in place
 
@@ -229,25 +246,27 @@ Two caveats that must travel with these numbers:
 
 ### Next action
 
-**Milestone 2: the evaluation harness.** This is the prescribed next step and
-the prerequisite for everything after it - the current 11-race test season
-cannot tell whether a feature or model change helped, because one race is 9.1
-percentage points of winner accuracy.
+**Re-ingest 2018-2021 first.** This is now the highest-value pending task, and
+the environment DOES have network access.
 
-Per FIX_PLAN.md section 9, milestone 2:
+- 47 evaluated races is below FIX_PLAN.md section 8's 60-race target, so the
+  race-count gate fails for every candidate and no promotion decision can be
+  made on the current data at all.
+- It also enables season folds (currently only 2 possible) instead of the
+  partial-season rolling blocks.
+- Expect it to be slow: roughly 4 seasons x 21 races x 2 sessions of FastF1
+  downloads. Run `python -m src.ingest --start-year 2018 --end-year 2021`,
+  then rebuild and re-backtest.
 
-- `src/backtest.py` - expanding-window outer folds over full seasons, event-level
-  split manifests frozen before tuning, inner folds for hyperparameters and
-  early stopping.
-- Paired bootstrap intervals on model-minus-baseline differences, resampled BY
-  RACE (never by driver row - 22 entries are not 22 independent observations).
-- Prediction exports per fold, so errors can be diagnosed after the fact.
-- Real winner/podium promotion gates from FIX_PLAN.md section 8, and a non-zero
-  exit when a gate fails (evaluation currently prints failure and exits 0).
+**Then milestone 3: qualifying and car features.** `quali_best_s` and
+`gap_to_pole_s` are ingested, 98.9% populated and unused - the single most
+obvious missing signal for a post-qualifying forecast. The backtest harness now
+exists to measure whether they help.
 
-Known gap to close when network is available: nobody has run
-`python -m src.predict` end to end since increment 1.7 changed its signature and
-grid handling. It needs FastF1 for the event schedule.
+Also worth doing early, given the finding above: alpha is selected by Spearman
+while the objective is winner/podium (FIX_PLAN.md P1). The backtest shows this
+mismatch is not theoretical - the blend buys Spearman by giving up winner
+accuracy.
 
 ## 8. Update protocol
 

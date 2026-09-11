@@ -44,15 +44,29 @@ TOP10_SIZE: Final = 10
 RACE_KEYS: Final = ("year", "round")
 
 
+# The only label fields the metrics read. Deliberately narrower than
+# labels.LABEL_COLS: a caller that already carries these -- a backtest's
+# exported predictions, say -- must not be forced to also carry the audit and
+# provenance columns just to be scored.
+METRIC_LABEL_COLS: Final = ("result_order", "finished", "is_winner",
+                            "is_podium", "finished_top10")
+
+
 def ensure_labels(df: pd.DataFrame) -> pd.DataFrame:
-    """Return a frame guaranteed to carry the src.labels fields.
+    """Return a frame guaranteed to carry the label fields the metrics need.
 
     features.parquet predates those columns but does retain `status` and
     `position`, and derive_labels is a pure row-wise transform, so they can be
     reconstructed without rebuilding any artifact.
     """
-    if all(col in df.columns for col in LABEL_COLS):
+    if all(col in df.columns for col in METRIC_LABEL_COLS):
         return df
+    missing_source = [c for c in ("status", "position") if c not in df.columns]
+    if missing_source:
+        raise KeyError(
+            f"Cannot score this frame: it lacks {sorted(set(METRIC_LABEL_COLS) - set(df.columns))} "
+            f"and cannot derive them without {missing_source}. Export the label "
+            f"columns alongside the predictions.")
     return derive_labels(df)
 
 
@@ -104,6 +118,56 @@ def _mean(values: list[float]) -> float | None:
     return float(np.mean(values)) if values else None
 
 
+# Per-race metric names, in the order they are reported.
+PER_RACE_METRICS: Final = ("winner_accuracy", "podium_overlap", "top10_overlap",
+                           "top_pick_finished_top10", "spearman_all",
+                           "spearman_finishers")
+
+
+def race_metric_rows(df: pd.DataFrame, score_col: str,
+                     ascending: bool) -> pd.DataFrame:
+    """One row per race, each metric as a column (NaN where undefined).
+
+    Kept separate from `race_metrics` because paired bootstrap intervals must
+    resample whole RACES, which needs the per-race values rather than their
+    mean (FIX_PLAN.md section 8: never treat 22 driver rows as 22 independent
+    observations).
+    """
+    data = ensure_labels(df)
+    rows = []
+    for (year, rnd), race in data.groupby(list(RACE_KEYS), sort=False):
+        race = race.assign(pred_rank=assign_pred_rank(race, score_col, ascending))
+        ordered = race.sort_values("pred_rank")
+
+        actual_winner = set(race.loc[race["is_winner"] == 1, "driver"])
+        actual_podium = set(race.loc[race["is_podium"] == 1, "driver"])
+        actual_top10 = set(race.loc[race["finished_top10"] == 1, "driver"])
+        top_pick = ordered.iloc[0]
+        finishers = race[race["finished"] == 1]
+
+        rows.append({
+            "year": year, "round": rnd,
+            "winner_accuracy": (float(top_pick["driver"] in actual_winner)
+                                if actual_winner else np.nan),
+            "podium_overlap": (
+                len(set(ordered.head(PODIUM_SIZE)["driver"]) & actual_podium) / PODIUM_SIZE
+                if actual_podium else np.nan),
+            "top10_overlap": (
+                len(set(ordered.head(TOP10_SIZE)["driver"]) & actual_top10) / TOP10_SIZE
+                if actual_top10 else np.nan),
+            # Renamed from the inherited `top1_hit_rate`, which read as "picked
+            # the winner" but is true whenever the top pick finishes anywhere in
+            # the top ten (FIX_PLAN.md section 2, P0-5).
+            "top_pick_finished_top10": (float(top_pick["finished_top10"] == 1)
+                                        if actual_top10 else np.nan),
+            "spearman_all": _spearman(race["pred_rank"], race["result_order"]),
+            "spearman_finishers": _spearman(finishers["pred_rank"],
+                                            finishers["result_order"]),
+        })
+    frame = pd.DataFrame(rows)
+    return frame.astype({m: "float64" for m in PER_RACE_METRICS}) if len(frame) else frame
+
+
 def race_metrics(df: pd.DataFrame, score_col: str, ascending: bool) -> dict[str, Any]:
     """Per-race metrics averaged over races, with per-metric denominators.
 
@@ -111,62 +175,20 @@ def race_metrics(df: pd.DataFrame, score_col: str, ascending: bool) -> dict[str,
     position, blended rank); `False` means higher is better (probabilities,
     ranker scores).
     """
-    data = ensure_labels(df)
+    rows = race_metric_rows(df, score_col, ascending)
+    if not len(rows):
+        return {m: None for m in PER_RACE_METRICS} | {"n_races": 0}
 
-    winner_hits: list[float] = []
-    podium_overlaps: list[float] = []
-    top10_overlaps: list[float] = []
-    top_pick_top10: list[float] = []
-    spearman_all: list[float] = []
-    spearman_finishers: list[float] = []
-
-    n_races = 0
-    for _, race in data.groupby(list(RACE_KEYS), sort=False):
-        n_races += 1
-        race = race.assign(pred_rank=assign_pred_rank(race, score_col, ascending))
-        ordered = race.sort_values("pred_rank")
-
-        actual_winner = set(race.loc[race["is_winner"] == 1, "driver"])
-        actual_podium = set(race.loc[race["is_podium"] == 1, "driver"])
-        actual_top10 = set(race.loc[race["finished_top10"] == 1, "driver"])
-
-        top_pick = ordered.iloc[0]
-        if actual_winner:
-            winner_hits.append(float(top_pick["driver"] in actual_winner))
-        if actual_podium:
-            predicted = set(ordered.head(PODIUM_SIZE)["driver"])
-            podium_overlaps.append(len(predicted & actual_podium) / PODIUM_SIZE)
-        if actual_top10:
-            predicted = set(ordered.head(TOP10_SIZE)["driver"])
-            top10_overlaps.append(len(predicted & actual_top10) / TOP10_SIZE)
-            top_pick_top10.append(float(top_pick["finished_top10"] == 1))
-
-        value = _spearman(race["pred_rank"], race["result_order"])
-        if value is not None:
-            spearman_all.append(value)
-
-        finishers = race[race["finished"] == 1]
-        value = _spearman(finishers["pred_rank"], finishers["result_order"])
-        if value is not None:
-            spearman_finishers.append(value)
-
-    return {
-        "winner_accuracy": _mean(winner_hits),
-        "podium_overlap": _mean(podium_overlaps),
-        "top10_overlap": _mean(top10_overlaps),
-        # Renamed from the inherited `top1_hit_rate`, which read as "picked the
-        # winner" but is true whenever the top pick finishes anywhere in the
-        # top ten (FIX_PLAN.md section 2, P0-5).
-        "top_pick_finished_top10": _mean(top_pick_top10),
-        "spearman_all": _mean(spearman_all),
-        "spearman_finishers": _mean(spearman_finishers),
-        "n_races": n_races,
-        "n_races_winner": len(winner_hits),
-        "n_races_podium": len(podium_overlaps),
-        "n_races_top10": len(top10_overlaps),
-        "n_races_spearman_all": len(spearman_all),
-        "n_races_spearman_finishers": len(spearman_finishers),
-    }
+    out: dict[str, Any] = {m: (float(rows[m].mean()) if rows[m].notna().any() else None)
+                           for m in PER_RACE_METRICS}
+    out["n_races"] = int(len(rows))
+    for metric, key in (("winner_accuracy", "n_races_winner"),
+                        ("podium_overlap", "n_races_podium"),
+                        ("top10_overlap", "n_races_top10"),
+                        ("spearman_all", "n_races_spearman_all"),
+                        ("spearman_finishers", "n_races_spearman_finishers")):
+        out[key] = int(rows[metric].notna().sum())
+    return out
 
 
 HEADLINE_COLS: Final = ("winner_accuracy", "podium_overlap", "top10_overlap",

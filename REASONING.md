@@ -902,11 +902,160 @@ guarantees unique positions within the real field size and labels the result.
 - Frozen artifacts byte-intact; `python -m src.baseline` still reports "NONE
   (metrics identical)".
 
+### Follow-up: end-to-end run (same day)
+
+The claim that this could not be verified without the user's network access was
+WRONG - both FastF1 endpoints are reachable from the working environment, and
+the assumption was carried over from FIX_PLAN.md's description of the ORIGINAL
+build environment without being tested. Running it found three real bugs:
+
+1. **The documented default command crashed.** `--models-dir` defaulted to
+   `models/`, the frozen legacy bundle, whose 30-feature model and pre-1.5 flat
+   fill file cannot be served by current code. Default is now `models/v2`, and
+   both failure modes raise actionable messages instead of tracebacks.
+2. **`predict.py` had the same drift bug fixed twice in `baseline.py`**: it
+   scored with the live `FEATURE_COLS` rather than the bundle's own
+   `feature_cols.json`. It now reads the bundle list and refuses on mismatch,
+   naming the differing columns.
+3. A syntax error introduced by bad escaping in a patch, caught by running it.
+
+Verified against real 2026 R12 data: the assumed-grid fallback, `--from-quali`
+(which picked up TSU, absent from the stored roster - the staleness fix working),
+`--pit-start PER,BOT` placing both at 22.0 rather than the old literal 20, and an
+incomplete `--grid` refusing with all 20 missing drivers named.
+
+Known limitation found: two pit starters both receive `grid_position` 22.0.
+Defensible - neither is on the grid - but pit-lane release order is not
+modelled, so the blend separates them only by tie-break.
+
 ### Not done in this increment
 
 - Sprint-weekend grid handling.
 - Persisting the snapshot alongside an immutable forecast record (milestone 5).
-- An end-to-end run of `python -m src.predict` (needs network).
+- Pit-lane release order.
+
+---
+
+## [009] Expanding-window backtest, paired intervals and promotion gates
+
+**Date:** 2026-09-11 - **Milestone:** 2 - **Files:** `src/backtest.py` (new),
+`src/gates.py` (new), `src/metrics.py`, `tests/test_backtest.py` (new)
+**Status:** implemented
+
+### Before
+
+Every judgement rested on one 11-race season scored once, with no interval and
+no refitting. `evaluate.py` printed "FAIL / NULL RESULT" and exited 0.
+
+### After
+
+`src/backtest.py` builds event-level folds (season or rolling-block), refits the
+fill policy AND both models inside each fold, and exports per-fold predictions
+with a hashed manifest of exactly which races each partition used.
+`src/gates.py` computes paired per-race differences against the baseline,
+bootstraps them BY RACE, applies the FIX_PLAN.md section 8 thresholds, and exits
+non-zero when nothing passes. `metrics.race_metric_rows()` was extracted so the
+per-race values feeding the bootstrap come from the same implementation as the
+pooled report.
+
+### Why
+
+- **The unit of resampling is the race.** Twenty-two drivers in one event share
+  a track, a weather window and a safety-car history. A driver-row bootstrap
+  would report intervals several times too narrow and manufacture significance.
+  `test_the_bootstrap_unit_is_the_race` pins this by showing the same signal
+  spread over ten times the rows produces a far tighter interval.
+- **Paired, not marginal.** Candidate and baseline see identical races, so the
+  interval belongs on the difference. Two overlapping marginal intervals say
+  nothing about whether one method beats the other.
+- **The policy is refitted per fold.** `fit_and_predict` takes the PRE-imputation
+  frame precisely so the fill constants cannot carry information from the block
+  being scored - the same defect [007] fixed for the single split.
+- **Manifests are hashed** so a later run cannot quietly evaluate a different
+  set of races and compare the number to an older one.
+- **Two fold schemes, because the data cannot support the preferred one.**
+  Season folds are what section 8 asks for, but 2022-2026 yields only 2 folds /
+  35 races against its 3+ folds and 60+ races target. Rolling blocks give 8
+  folds / 47 races from the same data. FIX_PLAN.md explicitly permits this
+  fallback and requires the weaker evidence to be labelled as such, which both
+  the CLI warning and the race-count gate now do.
+
+### The result: the models are reliably WORSE than the grid at picking winners
+
+Over 8 folds and 47 races, paired against the grid baseline (95% intervals,
+10,000 race-level resamples):
+
+| candidate | winner accuracy vs grid | resolves? |
+| --- | ---: | --- |
+| blend | **-0.0851** [-0.1702, -0.0213] | yes, excludes 0 |
+| rank_model | **-0.2128** [-0.3404, -0.0851] | yes |
+| top10_classifier | **-0.4468** [-0.6383, -0.2553] | yes |
+
+Pooled: grid 0.6170, blend 0.5319, rank_model 0.4043, classifier 0.1702.
+
+This changes the project's headline finding. The 11-race season showed the blend
+TYING the grid at 8/11, which read as "adds nothing". Across 47 races the sign
+resolves: the blend is significantly worse at picking winners, and the interval
+excludes zero. The single-season tie was a small-sample artefact.
+
+The blend does help on ordering: spearman +0.0184 [+0.0040, +0.0333], also
+resolving, and podium +0.0142 [-0.0213, +0.0496], which does not. So the blend
+buys slightly better full-field ordering at the cost of winner accuracy - which
+is exactly the objective mismatch FIX_PLAN.md flags as P1: alpha is selected by
+Spearman, and Spearman is what improves.
+
+No candidate passes the gates. `python -m src.gates` exits 1.
+
+### Trade-offs / what this costs
+
+- **47 races still misses the 60-race target**, and the race-count gate fails
+  for every candidate as a result. That is the gate working, not a bug - but it
+  means no promotion decision can currently be made on this data at all.
+  Re-ingesting 2018-2021 is the fix, and is now the highest-value pending task.
+- **Rolling blocks fit on partial seasons**, which no real deployment would do;
+  a mid-season refit sees a half-finished championship. Accepted for evidence
+  volume, and the season scheme remains available for the honest comparison once
+  more history exists.
+- **The probability gates are not implemented.** Winner log loss and podium
+  Brier need calibrated race-level win probabilities (milestone 4).
+  `summary()` lists them under `unavailable_gates` rather than quietly scoring
+  five checks and calling it seven.
+- **Hyperparameters are not tuned inside the folds.** `fit_and_predict` reuses
+  the fixed `PARAMS` from `train.py` / `train_rank.py`, so early stopping is the
+  only thing fitted per fold. Section 8 wants feature selection, ensemble
+  weights and calibration chosen in inner folds too; that arrives with the model
+  comparison in milestone 4.
+- **Blend alpha is passed in, not refitted per fold** (`--alpha`, default 0.5).
+  Strictly it should be selected inside each fold's inner validation. It is a
+  single scalar from one prior season, so the leak is small, but it is a leak
+  and should close when alpha selection moves to the winner/podium objective.
+- `ensure_labels` was narrowed to the five label columns the metrics actually
+  read, so exported predictions need not carry the audit and provenance columns
+  to be scored. Callers lacking both the labels and `status`/`position` now get
+  a named error instead of a `KeyError` on 'status'.
+
+### Verification
+
+- 149 tests pass (25 new in `tests/test_backtest.py`).
+- Fold invariants asserted directly: partitions never share a row, all training
+  and validation races precede the test block, validation sits between them,
+  blocks never overlap, the training window expands, manifest hashes are stable
+  across runs and change when the race set changes.
+- Interval behaviour asserted on constructed cases: identical series give
+  exactly zero, a consistent gain resolves, a noisy difference does not, missing
+  races drop pairwise, and results are reproducible under a fixed seed.
+- Gate behaviour asserted for each threshold independently, including that a
+  large gain still fails on too few folds or too few races.
+- The refactor extracting `race_metric_rows` left all 124 pre-existing tests
+  passing unchanged.
+
+### Not done in this increment
+
+- Inner-fold hyperparameter and alpha selection.
+- Calibrated probabilities and their gates (milestone 4).
+- Consecutive-race block bootstrap (section 8 also asks for this alongside the
+  race bootstrap, because neighbouring events share form).
+- Per-slice reporting: wet/dry, penalties, rookies, sprint formats.
 
 ---
 
