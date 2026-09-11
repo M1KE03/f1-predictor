@@ -1486,4 +1486,108 @@ better at ESTIMATING who wins and no better at CHOOSING differently.
 
 ---
 
+## [013] Model bundles, forecast output, and an early-stopping bug
+
+**Date:** 2026-09-11 - **Milestone:** 5 - **Files:** `src/bundle.py` (new),
+`src/build_bundle.py` (new), `src/predict.py`, `src/backtest.py`,
+`src/train_rank.py`, `tests/test_bundle.py` (new)
+**Status:** implemented
+
+### The early-stopping bug (found while building the bundle)
+
+The first bundle came out with **4 boosting iterations**. Tracing it exposed a
+defect I had introduced into the backtest in milestone 2 and never noticed:
+
+```python
+eval_at=[1, 3, 10], callbacks=[lgb.early_stopping(100)]
+```
+
+LightGBM stops when ANY eval metric stalls unless `first_metric_only=True`.
+NDCG@1 on a ~22-race validation block is essentially winner accuracy on 22
+observations -- far too noisy to govern training. It was truncating folds:
+
+    best_iteration per fold, before: [12, 44, 11, 13, 20,  4]
+    after first_metric_only=True   : [101, 44, 11, 13, 20, 65]
+
+FIX_PLAN.md section 6 warned about exactly this -- "specify one primary
+early-stopping metric and `first_metric_only=True`, instead of leaving
+selection behavior implicit" -- and I had implemented the thing it warns
+against. NDCG@3 is now the declared primary metric.
+
+**Effect on the headline number**: ranker winner accuracy 0.5984 -> **0.6063**
+against a grid baseline of 0.5591, i.e. +0.0472 against a +0.05 gate. Winner
+log loss 1.1722 -> 1.1469. Every previous measurement in milestones 3 and 4 was
+made with under-trained rankers.
+
+### Bundles
+
+`src/bundle.py` defines an immutable bundle: ranker, fitted policy, and a
+manifest binding data hash, feature schema, policy schema, temperature, alpha,
+iteration count, code revision, dependency versions and validation summary.
+
+`load()` verifies before returning. `assert_can_predict()` refuses a target
+race at or before the training cutoff -- the failure that would report
+excellent accuracy and be pure hindsight, and which nothing else in the
+pipeline detects.
+
+`src/build_bundle.py` is two-stage, per FIX_PLAN.md section 11: develop the
+recipe (iterations, temperature, alpha) on a chronological split, then **refit
+on ALL history** with the iteration count frozen. Otherwise deployment ships a
+model that never saw the two most recent seasons.
+
+### Forecast output
+
+`predict.py` now loads a bundle and emits coherent win / podium / top-10
+probabilities alongside the utility order. `--archive` writes an immutable
+record to `reports/forecasts/` binding the prediction to the grid status it was
+made against and the exact bundle that made it.
+
+That archive is the point. FIX_PLAN.md section 8 point 6: historical backtests
+become development evidence once they have been inspected repeatedly, and only
+timestamped forecasts frozen BEFORE their outcomes can validate the pipeline
+prospectively. None was being collected. With roughly nine races left in 2026,
+starting now is the difference between having that evidence next season and
+not.
+
+Verified end to end on 2026 R14: 22 drivers, sum(p_win) = 1.0, grid status
+PROVISIONAL with its caveats printed, archived to `reports/forecasts/2026-14.json`.
+
+### Trade-offs / what this costs
+
+- **The displayed order and the probabilities can disagree row for row.** The
+  order is the grid/ranker blend at the bundle's alpha; the probabilities come
+  from the ranker alone. FIX_PLAN.md section 11 permits this but requires it to
+  be stated, so the output now says which quantity is calibrated. It still
+  looks odd in the table and would be worth unifying.
+- **`models/champion` is not versioned for rollback.** Section 11 asks for a
+  previous champion to be retained; there is one directory.
+- **An unexplained artefact.** `p_top10` differs between the `backtest_pace`
+  and `backtest_prob` runs (max 0.56) although the classifier code did not
+  change between them; `rank_score` was byte-identical across those runs. The
+  pipeline IS deterministic -- re-running the current code twice gives
+  bit-identical predictions across all four score columns, and LightGBM
+  reproduces exactly across three fits -- so this is not run-to-run noise. It
+  affects the top-10 classifier, which is not the champion. Recorded rather
+  than explained away; it should be bisected if the classifier is ever
+  promoted.
+- Temperatures still bottom out near the search floor in some folds.
+
+### Verification
+
+- 243 tests (11 new in `tests/test_bundle.py`).
+- The cutoff check is asserted in both directions, including the boundary case:
+  a race exactly ON the cutoff is refused, because that race IS in training.
+- Feature-schema mismatch is refused with the differing columns named. This is
+  not hypothetical: it happened twice in this project when `FEATURE_COLS`
+  changed, once crashing `src.baseline` and once nearly serving a 30-feature
+  model on 22 features.
+- A directory without a manifest is refused, so pre-bundle `models/` cannot be
+  served.
+- The built champion loads, verifies, and refuses its own training cutoff.
+- Determinism confirmed: an identical re-run of the full backtest produced
+  max|diff| = 0 on p_top10, rank_score, ensemble_score and p_win.
+- Frozen baseline artifacts still intact.
+
+---
+
 <!-- Append new entries above this line, newest last. -->

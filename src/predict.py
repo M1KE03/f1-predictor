@@ -1,26 +1,26 @@
 """Pre-race inference for a race that has not been run yet.
 
-Spec section 6's inference entry point was deliberately deferred until after
-Gate 3 passed on real data (see README). Gate 3 has NOT passed on this data
-(evaluate.py: model beats the grid baseline on set-overlap but not Spearman,
-on an 8-race partial 2026 test season) -- so treat this script's output as
-exploratory, not validated.
+Appends one placeholder row per driver for the target race and runs it through
+`features.build_asof_features` -- the SAME path used to build training data, so
+the feature vector is identical to the one the model was fitted on. The
+placeholder's outcome columns stay empty; nothing reads a row's own result.
 
-Mechanism: append one placeholder row per driver for the target race to
-raw_results.parquet's schema, run it through the *exact same* leakage-safe
-feature pipeline used for training (so every historical feature -- form,
-circuit history, reliability, teammate deltas -- is computed identically),
-then score with the trained model. The placeholder's own outcome columns
-(position/points/status/is_dnf) are never read by its own features (the
-shift(1) pattern excludes the current row), so leaving them empty is safe.
+Scoring uses a versioned model bundle (src/bundle.py), which verifies its
+feature schema, its imputation-policy version, and that it was NOT trained on
+races at or after the target -- the one failure that would look like excellent
+accuracy and be pure hindsight.
 
-Two unknowns for a not-yet-run race, both flagged in the output:
-  - grid_position: real quali hasn't happened. Falls back to each driver's
-    own recent qualifying form (form_avg_quali_3) as an "assumed grid".
-  - race-day weather: no forecast ingested. Falls back to the model's saved
-    global fill values (same policy as any other missing weather reading).
+Output is a utility ORDER plus coherent win / podium / top-10 PROBABILITIES
+from one Plackett-Luce distribution.
 
-Run: python -m src.predict --year 2026 --round 9
+Honest status: winner accuracy does not beat the starting grid by the
+FIX_PLAN.md section 8 margin (+0.0394 [-0.0394, +0.1181] over 127 backtested
+races). The calibrated probabilities DO beat a probabilistic grid baseline
+(winner log loss 1.15 vs 1.66, interval excludes zero). Read the probabilities
+as the useful output and the order as roughly grid-equivalent.
+
+Run:
+    python -m src.predict --year 2026 --round 14 --from-quali --archive
 """
 import argparse
 import json
@@ -31,12 +31,14 @@ import joblib
 import numpy as np
 import pandas as pd
 
-from .blend_rank import add_blended_score
-from .columns import FEATURE_COLS
 from . import grid as grid_module
+from .blend_rank import add_blended_score
+from .bundle import BundleError, ModelBundle
+from .columns import FEATURE_COLS
 from .features import build_asof_features
 from .metrics import pred_rank_by_race
-from .preprocessing import FillPolicy, assert_no_missing
+from .preprocessing import assert_no_missing
+from .probabilities import add_probabilities
 
 log = logging.getLogger("predict")
 
@@ -46,7 +48,8 @@ MODELS_DIR = PROJECT_ROOT / "models"
 # The frozen legacy bundle in models/ was fitted on 30 features and a
 # pre-1.5 fill format, so it cannot serve predictions with this code.
 # The corrected pipeline writes here (see README "Artifact layout").
-DEFAULT_MODELS_DIR = PROJECT_ROOT / "models" / "v2"
+DEFAULT_MODELS_DIR = PROJECT_ROOT / "models" / "champion"
+FORECAST_DIR = PROJECT_ROOT / "reports" / "forecasts"
 
 
 def build_placeholder_rows(raw: pd.DataFrame, year: int, rnd: int,
@@ -150,62 +153,42 @@ def predict(year: int, rnd: int,
     combined.loc[target_mask, "pit_start"] = (
         combined.loc[target_mask, "driver"].map(positions["pit_start"]).to_numpy())
 
-    # Score with the bundle's OWN feature list, not the live FEATURE_COLS.
-    # Importing the live list would silently serve a model on a feature set it
-    # was not fitted on whenever columns.py changes -- the same drift that broke
-    # src.baseline when increment 1.4 shrank the list from 30 to 22.
-    bundle_features = json.loads((models_dir / "feature_cols.json").read_text())
-    if bundle_features != FEATURE_COLS:
-        raise ValueError(
-            f"{models_dir} was trained on {len(bundle_features)} features, but "
-            f"columns.FEATURE_COLS now has {len(FEATURE_COLS)}. Serving it would "
-            f"mean scoring a model on inputs it never saw.\n"
-            f"  only in bundle: {sorted(set(bundle_features) - set(FEATURE_COLS))}\n"
-            f"  only in code  : {sorted(set(FEATURE_COLS) - set(bundle_features))}\n"
-            f"Retrain into this directory, or point --models-dir at a current bundle.")
+    # The bundle verifies its own feature schema, policy version and -- most
+    # importantly -- that it was not trained on races at or after this one.
+    bundle = ModelBundle.load(models_dir, FEATURE_COLS)
+    bundle.assert_can_predict(date)
 
-    # The SAME fitted policy the model was trained with, replayed exactly --
-    # including the driver-prior fallback the old serving path skipped, which
-    # gave 2091 cells a different value here than in training.
-    try:
-        policy = FillPolicy.from_json(models_dir / "fill_values.json")
-    except (ValueError, TypeError) as exc:
-        raise ValueError(
-            f"Cannot load the imputation policy from {models_dir}: {exc}\n"
-            f"Bundles written before increment 1.5 store a flat dict of fill "
-            f"values and cannot be served by this code. Rebuild with:\n"
-            f"  python -m src.build_features --out-dir data/v2\n"
-            f"  python -m src.train      --features data/v2/features.parquet "
-            f"--models-dir {models_dir}\n"
-            f"  python -m src.train_rank --features data/v2/features.parquet "
-            f"--models-dir {models_dir}") from exc
-
-    combined = policy.transform(combined)
+    combined = bundle.policy.transform(combined)
     assert_no_missing(combined.loc[target_mask], FEATURE_COLS)
 
-    clf = joblib.load(models_dir / "model.joblib")
-    ranker = joblib.load(models_dir / "rank_model.joblib")
-    with open(models_dir / "blend_alpha.json") as f:
-        alpha = json.load(f)["alpha"]
+    race = combined.loc[target_mask, ["year", "round", "driver", "team",
+                                      "grid_position", "pit_start"]].copy()
+    race["rank_score"] = bundle.ranker.predict(combined.loc[target_mask, FEATURE_COLS])
+    race["blend_score"] = add_blended_score(race, "rank_score",
+                                            bundle.manifest.alpha)
 
-    race = combined.loc[target_mask, ["driver", "team", "grid_position"]].copy()
-    race["p_top10"] = clf.predict_proba(combined.loc[target_mask, FEATURE_COLS])[:, 1]
-    race["rank_score"] = ranker.predict(combined.loc[target_mask, FEATURE_COLS])
-
-    # One race, so the frame needs the race keys for the shared per-race
-    # helper. Deterministic ties matter more here than anywhere else: this is
-    # the published forecast, and the inherited rank(method='first') made it
-    # depend on the order the roster happened to arrive in.
-    race["year"], race["round"] = year, rnd
-    race["blend_score"] = add_blended_score(race, "rank_score", alpha)
+    # Coherent win / podium / top-10 probabilities from one Plackett-Luce
+    # distribution, using the temperature fitted when the bundle was built.
+    race = add_probabilities(race, "rank_score", bundle.manifest.temperature)
 
     out = (race.assign(_order=pred_rank_by_race(race, "blend_score", ascending=True))
                .sort_values("_order").reset_index(drop=True))
     out.insert(0, "pred_finish_rank", out.index + 1)
     out["predicted_podium"] = out["pred_finish_rank"] <= 3
     out.attrs["grid"] = grid_snapshot.to_dict()
+    out.attrs["bundle"] = {
+        "path": str(models_dir),
+        "training_cutoff_utc": bundle.manifest.training_cutoff_utc,
+        "code_revision": bundle.manifest.code_revision,
+        "data_sha256": bundle.manifest.data_sha256,
+        "temperature": bundle.manifest.temperature,
+        "alpha": bundle.manifest.alpha,
+        "n_train_races": bundle.manifest.n_train_races,
+    }
+    out.attrs["event"] = {"year": year, "round": rnd, "event_name": event_name,
+                          "circuit_id": circuit_id, "date": str(date)}
     return out[["pred_finish_rank", "driver", "team", "grid_position",
-                "predicted_podium", "p_top10"]]
+                "predicted_podium", "p_win", "p_podium", "p_top10"]]
 
 
 def grid_from_cli(args, roster: pd.DataFrame) -> grid_module.GridSnapshot | None:
@@ -243,6 +226,41 @@ def grid_from_cli(args, roster: pd.DataFrame) -> grid_module.GridSnapshot | None
     return None
 
 
+def archive_forecast(out: pd.DataFrame, directory: Path = FORECAST_DIR) -> Path:
+    """Write an IMMUTABLE forecast record.
+
+    FIX_PLAN.md section 8 point 6: historical backtests are development
+    evidence once they have been looked at repeatedly, and only a sequence of
+    timestamped forecasts frozen BEFORE their outcomes can validate the
+    pipeline prospectively. None was being collected, so none exists -- and
+    the only way to have that evidence next season is to start now.
+
+    The record binds the prediction to the grid status it was made against and
+    the exact bundle that made it, so it can be scored later without trusting
+    anyone's memory of which model was live.
+    """
+    event = out.attrs["event"]
+    record = {
+        "schema_version": 1,
+        "created_utc": pd.Timestamp.utcnow().isoformat(),
+        "event": event,
+        "grid": out.attrs["grid"],
+        "bundle": out.attrs["bundle"],
+        "predictions": out.to_dict(orient="records"),
+    }
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{event['year']}-{int(event['round']):02d}.json"
+    if path.exists():
+        # Immutable on purpose: a forecast that can be rewritten after the race
+        # is not evidence of anything.
+        raise FileExistsError(
+            f"{path} already exists. A forecast record is immutable -- delete it "
+            f"deliberately if you really mean to replace it.")
+    with path.open("w", encoding="utf-8") as fh:
+        json.dump(record, fh, indent=2, default=str)
+    return path
+
+
 def main():
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     ap = argparse.ArgumentParser(description=__doc__)
@@ -259,6 +277,9 @@ def main():
     ap.add_argument("--cutoff", type=str, default=None,
                     help="forecast cutoff in UTC, recorded with the output "
                          "(e.g. 2026-08-01T13:00:00Z)")
+    ap.add_argument("--archive", action="store_true",
+                    help="write an immutable timestamped forecast record to "
+                         "reports/forecasts/ for later scoring")
     ap.add_argument("--models-dir", type=Path, default=DEFAULT_MODELS_DIR,
                     help="model bundle directory (default: models/v2, the "
                          "corrected pipeline). models/ holds the frozen "
@@ -309,7 +330,23 @@ def main():
           "shown for reference only -- it is not what the order is sorted by.")
     print("NOTE: no weather input is used. Race-session weather was removed as "
           "unavailable before lights-out (see README).\n")
+    bundle_info = out.attrs["bundle"]
+    print(f"Bundle      : {bundle_info['path']}")
+    print(f"  trained on {bundle_info['n_train_races']} races up to "
+          f"{pd.Timestamp(bundle_info['training_cutoff_utc']).date()}, "
+          f"T={bundle_info['temperature']:.3f}, alpha={bundle_info['alpha']}")
+    print(f"  code {(bundle_info['code_revision'] or 'unknown')[:12]}  "
+          f"data {(bundle_info['data_sha256'] or '')[:12]}\n")
     print(out.to_string(index=False))
+
+    print("\nNOTE: winner accuracy does NOT beat the starting grid by the "
+          "FIX_PLAN section 8 margin; the calibrated PROBABILITIES do beat a "
+          "probabilistic grid baseline. Read p_win as the useful output and the "
+          "predicted order as roughly grid-equivalent.")
+
+    if args.archive:
+        path = archive_forecast(out)
+        print(f"\nArchived immutable forecast -> {path}")
 
 
 if __name__ == "__main__":

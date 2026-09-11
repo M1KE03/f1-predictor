@@ -254,8 +254,15 @@ def fit_and_predict(prefill: pd.DataFrame, fold: Fold,
     ranker = lgb.LGBMRanker(**{**RANK_PARAMS, **(rank_params or {})})
     ranker.fit(train[FEATURE_COLS], train["relevance"], group=group_sizes(train),
                eval_set=[(val[FEATURE_COLS], val["relevance"])],
-               eval_group=[group_sizes(val)], eval_at=[1, 3, 10],
-               callbacks=[lgb.early_stopping(100, verbose=False),
+               eval_group=[group_sizes(val)], eval_at=[3, 1, 10],
+               # NDCG@3 is the PRIMARY early-stopping metric and
+               # first_metric_only makes that explicit. Without it LightGBM
+               # stops as soon as ANY eval metric stalls, and NDCG@1 on a
+               # ~22-race validation block is far too noisy to govern training:
+               # it truncated folds to as few as 4 iterations
+               # (FIX_PLAN.md section 6).
+               callbacks=[lgb.early_stopping(100, first_metric_only=True,
+                                             verbose=False),
                           lgb.log_evaluation(0)])
 
     out = test[RACE_KEYS + ["driver", "team", "grid_position", "result_order",

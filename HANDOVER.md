@@ -7,7 +7,7 @@ Claude session and it should be able to continue without re-reading everything.
 any milestone lands. Keep it current, not comprehensive — detail lives in
 `REASONING.md` and `FIX_PLAN.md`.
 
-**Last updated:** 2026-09-11 — session 1 (milestones 0-2 complete; 3.1-3.2, 4.1-4.2 done)
+**Last updated:** 2026-09-11 — session 1 (milestones 0-5 done; champion bundle built, forecasts archiving)
 
 ---
 
@@ -130,7 +130,7 @@ fitted imputation state, or serving parity.
 | 2 | Evaluation harness: `backtest.py`, `metrics.py`, real winner gates | **DONE** - 8 folds / 47 races; gates exit non-zero |
 | 3 | Qualifying & car features: `qualifying.py`, `ratings.py` | **DONE**. 3.1 quali pace: no gain. 3.2 race pace + alpha fix: best result so far |
 | 4 | Model comparison M0-M4 (+ Plackett-Luce, winner/podium heads) | **4.1 DONE, PASSES** (probabilities); **4.2 DONE, negative** (heads) |
-| 5 | Validated forecast output with model bundle + probabilities | NOT STARTED |
+| 5 | Validated forecast output with model bundle + probabilities | **DONE** - `models/champion`, `reports/forecasts/` |
 | 6 | Optional: practice pace, forecast archive, TabPFN, custom NN | NOT STARTED |
 
 Milestones 1 and 2 go together — correctness first, then the harness to measure
@@ -274,34 +274,35 @@ python -m src.gates --backtest-dir reports/backtest_season
 
 ### CURRENT BEST CONFIGURATION
 
-**Ranker (38 features) + Plackett-Luce probability layer.** NOT the ensemble.
+**`models/champion`** - ranker (38 features) + Plackett-Luce probability layer.
+NOT the specialist-head ensemble.
 
-Pooled over 6 season folds / 127 races (2018-2026):
+Pooled over 6 season folds / 127 races (2018-2026), after the early-stopping fix:
 
 | method | winner | podium | top-10 | spearman | winner log loss |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | grid_baseline | 0.5591 | 0.6693 | 0.7701 | 0.6305 | 1.6569 |
-| **rank_model** | **0.5984** | 0.6693 | **0.7811** | **0.6520** | **1.1722** |
-| blend (per-fold alpha) | 0.5984 | 0.6693 | 0.7787 | 0.6582 | - |
-| ensemble (+ heads) | 0.5827 | 0.6719 | 0.7772 | 0.6393 | 1.1890 |
+| **rank_model** | **0.6063** | 0.6719 | 0.7811 | 0.6487 | **1.1469** |
+| blend | 0.5984 | 0.6745 | 0.7787 | 0.6570 | - |
 | uniform floor | - | - | - | - | 3.0047 |
 
-Gate status:
+Gates: winner accuracy +0.047 against a +0.05 threshold (does not resolve);
+all four PROBABILITY gates PASS, winner log loss resolving at -0.51.
+Calibration: favourite's mean p_win 0.562 vs a 0.606 actual win rate.
 
-| gate | status |
-| --- | --- |
-| winner accuracy +0.05 | FAIL (+0.0394 [-0.0394, +0.1181]) |
-| podium overlap +0.03 | FAIL (+0.0000) |
-| top-10 / spearman guardrails | PASS (spearman resolves) |
-| 3+ folds, 60+ races | PASS |
-| **winner log loss beats grid** | **PASS, resolves (-0.4847)** |
-| **podium Brier / coherence / uniform floor** | **PASS** |
+**Read the probabilities as the useful output and the order as roughly
+grid-equivalent.** That distinction is printed by `predict.py`.
 
-**The key insight from 4.1:** the ranker is significantly better than grid at
-ESTIMATING who wins (log loss resolves) but not at CHOOSING differently
-(accuracy does not). Winner accuracy is argmax and only sees the top pick; log
-loss sees the whole distribution. Calibration: favourite's mean p_win 0.548 vs
-a 0.598 actual win rate.
+Produce and archive a forecast:
+
+```
+python -m src.build_bundle                      # -> models/champion
+python -m src.predict --year 2026 --round 14 --from-quali --archive
+```
+
+`--archive` writes an immutable record to `reports/forecasts/` binding the
+prediction to its grid status and the exact bundle. This is the prospective
+evidence FIX_PLAN.md section 8.6 requires and nothing else provides.
 
 ### Experiment log (what worked and what did not)
 
@@ -312,6 +313,7 @@ a 0.598 actual win rate.
 | 3.2b | alpha selected per fold by winner objective | recovered the gain into the blend; Spearman-selected alpha was costing 4pp |
 | 4.1 | Plackett-Luce probabilities + temperature calibration | **PASSES 4 gates.** First gates ever passed |
 | 4.2 | specialist winner/podium heads | **NEGATIVE.** Weight selection overfits a ~22-race validation block; the 2 folds giving heads most weight got worse on test |
+| 5 | model bundle + calibrated forecast + archive | shipped; also fixed an early-stopping bug worth +0.008 winner accuracy |
 
 Reproduce:
 
@@ -322,37 +324,34 @@ python -m src.gates    --backtest-dir reports/backtest_heads
 
 ### Next action
 
-The binding constraint is now EVIDENCE, not ideas. Winner accuracy sits at
-+0.0394 [-0.0394, +0.1181] against a +0.05 gate: the gate is plausible but
-unproven, and the interval is too wide to resolve on 127 races.
+Milestones 0-5 are done. The pipeline is correct, measured, bundled and
+shipping forecasts. What remains is not a missing feature but missing evidence.
 
-Options, in order of expected value:
+1. **Archive a forecast for every remaining 2026 race.** Roughly nine left.
+   `python -m src.predict --year 2026 --round N --from-quali --archive`, run
+   AFTER qualifying and BEFORE the race. Then a scoring script to compare the
+   archive against results as they arrive. This is the only evidence that
+   accumulates on its own.
+2. **In-fold hyperparameter tuning.** Never attempted: `fit_and_predict` uses
+   fixed PARAMS with only early stopping fitted per fold. FIX_PLAN.md section 6
+   proposes a bounded search (leaves 7/15/31, min leaf rows 20/40/80,
+   lambdarank truncation 4/6/10) on a fixed budget. Cheap, honest within the
+   existing harness, and the early-stopping bug suggests training is not yet
+   well configured.
+3. **Practice pace** (FIX_PLAN.md section 5.D): long-run stints, tyre-age
+   slope. The last untried source of genuinely new information, ~560 session
+   loads.
 
-1. **Milestone 5: ship what works.** Ranker + Plackett-Luce is the best
-   measured configuration and already passes every probability gate. Bundle it
-   (model + feature schema + fitted policy + temperature + split manifest +
-   data hash), wire `predict.py` to emit calibrated win/podium/top-10
-   probabilities, and start archiving timestamped forecasts. FIX_PLAN.md
-   section 8 point 6 is explicit that prospective evidence -- forecasts frozen
-   BEFORE outcomes -- is what the project ultimately needs, and none is being
-   collected.
-2. **Practice pace** (FIX_PLAN.md section 5.D): long-run stints, tyre-age
-   slope, stint consistency. The only untried source of genuinely new
-   information. Needs ~560 more session loads.
-3. **Hyperparameter tuning inside folds.** Never done: `fit_and_predict` uses
-   fixed PARAMS with only early stopping fitted per fold. Cheap, and honest
-   within the existing harness.
+Known gaps, none blocking:
 
-Recommendation: 1, then 3, then 2. The project can now measure honestly but has
-never produced a usable forecast artifact, and every offline gain is bounded by
-a sample size that only time fixes.
-
-Caveats that must travel with any result:
-
-- 2026 is 13 races; grid winner accuracy there is 0.6923 vs 0.5591 pooled, so
-  that season is unusually grid-predictable.
-- Temperatures are small (0.05-0.38) and one fold hit the search floor.
-- The ensemble is a challenger, not the champion. Do not ship it.
+- `models/champion` keeps no previous champion for rollback (section 11).
+- Displayed order and probabilities can disagree row for row; permitted by
+  section 11 if stated, and it is stated, but worth unifying.
+- Unexplained `p_top10` shift between two historical backtest runs; the
+  pipeline is verified deterministic now and the classifier is not the
+  champion. See REASONING [013].
+- Sprint-weekend handling, and the `sakhir` circuit_id collision (2020 Sakhir
+  GP outer layout shares an id with the Bahrain GP, 20 rows).
 
 ## 8. Update protocol
 

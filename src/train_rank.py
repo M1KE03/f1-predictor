@@ -112,8 +112,11 @@ def main():
     ranker.fit(
         X_tr, y_tr, group=group_sizes(train),
         eval_set=[(X_val, y_val)], eval_group=[group_sizes(val)],
-        eval_at=[3, 10],
-        callbacks=[lgb.early_stopping(100), lgb.log_evaluation(50)],
+        eval_at=[3, 1, 10],
+        # NDCG@3 primary; see FIX_PLAN.md section 6 on making the
+        # early-stopping metric explicit rather than implicit.
+        callbacks=[lgb.early_stopping(100, first_metric_only=True),
+                   lgb.log_evaluation(50)],
     )
 
     log.info("Best iteration: %s", ranker.best_iteration_)
