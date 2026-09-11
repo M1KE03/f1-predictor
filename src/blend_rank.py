@@ -23,7 +23,7 @@ import numpy as np
 import pandas as pd
 
 from .columns import FEATURE_COLS
-from .evaluate_rank import order_metrics
+from .metrics import HEADLINE_COLS, pred_rank_by_race, race_metrics
 from .train import chronological_split
 
 log = logging.getLogger("blend_rank")
@@ -35,13 +35,26 @@ MODELS_DIR = PROJECT_ROOT / "models"
 
 def add_blended_score(df: pd.DataFrame, model_score_col: str, alpha: float) -> pd.Series:
     """Lower blended score = predicted to finish better (so use ascending=True
-    downstream, same convention as raw grid_position)."""
-    grid_rank = df.groupby(["year", "round"])["grid_position"].rank(ascending=True, method="first")
-    model_rank = df.groupby(["year", "round"])[model_score_col].rank(ascending=False, method="first")
+    downstream, same convention as raw grid_position).
+
+    Both component ranks use the deterministic tie policy (src.metrics). The
+    inherited rank(method='first') broke ties by row order, which made the
+    blended score -- and therefore the published forecast, not merely its
+    evaluation -- depend on how the rows happened to be arranged.
+    """
+    grid_rank = pred_rank_by_race(df, "grid_position", ascending=True)
+    model_rank = pred_rank_by_race(df, model_score_col, ascending=False)
     return alpha * grid_rank + (1 - alpha) * model_rank
 
 
 def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--write", action="store_true",
+                        help="overwrite models/blend_alpha.json with the chosen alpha")
+    args = parser.parse_args()
+
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
     ranker = joblib.load(MODELS_DIR / "rank_model.joblib")
@@ -55,35 +68,48 @@ def main():
     for alpha in np.round(np.arange(0.0, 1.01, 0.1), 2):
         val = val.copy()
         val["blend_score"] = add_blended_score(val, "rank_score", alpha)
-        m = order_metrics(val, "blend_score", ascending=True)
-        rows.append(dict(alpha=alpha, **m))
-        if m["spearman"] > best_spearman:
-            best_spearman, best_alpha = m["spearman"], alpha
+        m = race_metrics(val, "blend_score", ascending=True)
+        rows.append(dict(alpha=alpha, **{k: m[k] for k in HEADLINE_COLS}))
+        if m["spearman_all"] > best_spearman:
+            best_spearman, best_alpha = m["spearman_all"], alpha
     print(pd.DataFrame(rows).round(4).to_string(index=False))
     print(f"\nChosen alpha (best validation-season Spearman): {best_alpha}")
 
     test = test.copy()
     test["blend_score"] = add_blended_score(test, "rank_score", best_alpha)
-    blend_m = order_metrics(test, "blend_score", ascending=True)
-    grid_m = order_metrics(test, "grid_position", ascending=True)
-    model_m = order_metrics(test, "rank_score", ascending=False)
+    blend_m = race_metrics(test, "blend_score", ascending=True)
+    grid_m = race_metrics(test, "grid_position", ascending=True)
+    model_m = race_metrics(test, "rank_score", ascending=False)
 
     print(f"\n=================== TEST SEASON ({latest}) RESULT ===================")
     table = pd.DataFrame([blend_m, grid_m, model_m],
-                         index=[f"blend(alpha={best_alpha})", "grid_baseline", "rank_model_alone"]).round(4)
-    print(table[["spearman", "podium_precision", "winner_accuracy"]].to_string())
+                         index=[f"blend(alpha={best_alpha})", "grid_baseline", "rank_model_alone"])
+    print(table[list(HEADLINE_COLS)].astype(float).round(4).to_string())
 
-    beats_spearman = blend_m["spearman"] > grid_m["spearman"]
-    beats_podium = blend_m["podium_precision"] >= grid_m["podium_precision"]
+    beats_spearman = blend_m["spearman_all"] > grid_m["spearman_all"]
+    beats_podium = blend_m["podium_overlap"] >= grid_m["podium_overlap"]
     print("\nBlend vs grid baseline:")
     print(f"  spearman         : {'BEATS' if beats_spearman else 'DOES NOT BEAT'} baseline "
-          f"({blend_m['spearman']:.4f} vs {grid_m['spearman']:.4f})")
-    print(f"  podium_precision : {'>=' if beats_podium else '<'} baseline "
-          f"({blend_m['podium_precision']:.4f} vs {grid_m['podium_precision']:.4f})")
+          f"({blend_m['spearman_all']:.4f} vs {grid_m['spearman_all']:.4f})")
+    print(f"  podium_overlap   : {'>=' if beats_podium else '<'} baseline "
+          f"({blend_m['podium_overlap']:.4f} vs {grid_m['podium_overlap']:.4f})")
+    print(f"  winner_accuracy  : {blend_m['winner_accuracy']:.4f} vs "
+          f"{grid_m['winner_accuracy']:.4f}  (NOT the selection criterion)")
+    print("\nNOTE: alpha is still selected by validation Spearman, which is not "
+          "the winner/podium objective this project is for. Changing the "
+          "selection criterion is a separate decision (FIX_PLAN.md section 2, "
+          "P1) and is deliberately not bundled into this correctness pass.")
 
-    with open(MODELS_DIR / "blend_alpha.json", "w") as f:
-        json.dump({"alpha": float(best_alpha)}, f, indent=2)
-    print(f"\nSaved alpha -> {MODELS_DIR / 'blend_alpha.json'}")
+    alpha_path = MODELS_DIR / "blend_alpha.json"
+    if args.write:
+        with open(alpha_path, "w") as f:
+            json.dump({"alpha": float(best_alpha)}, f, indent=2)
+        print(f"\nSaved alpha -> {alpha_path}")
+    else:
+        # The saved artifact is hashed in reports/baseline.json, so overwriting
+        # it is now an explicit act rather than a side effect of inspecting the
+        # sweep.
+        print(f"\nalpha NOT saved. Pass --write to overwrite {alpha_path}.")
     print("==========================================================")
 
 

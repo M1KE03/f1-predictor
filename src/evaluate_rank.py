@@ -1,11 +1,16 @@
 """Evaluation for the finishing-order ranker (src.train_rank), on the same
 held-out test season convention as evaluate.py.
 
-Metrics that actually match "predict the finishing order / podium":
-  - Spearman correlation between predicted order and actual finishing position
-  - podium precision: overlap between predicted top-3 and actual top-3
-  - winner accuracy: predicted P1 actually finished P1
+Metrics that match "predict the finishing order / podium":
+  - winner accuracy: the top-ranked driver actually won
+  - podium overlap: predicted top-3 against the actual podium
+  - Spearman against the published result order, reported twice -- over all
+    entries and over finishers only, each with its own denominator
 Compared against the grid-position baseline (predict order = starting grid).
+
+All metric logic lives in src.metrics, which is shared with evaluate.py and
+applies the deterministic tie policy. This module only loads, scores and
+prints.
 
 Run: python -m src.evaluate_rank
 """
@@ -13,10 +18,10 @@ import logging
 from pathlib import Path
 
 import joblib
-import numpy as np
 import pandas as pd
 
 from .columns import FEATURE_COLS
+from .metrics import HEADLINE_COLS, race_metrics
 
 log = logging.getLogger("evaluate_rank")
 
@@ -26,31 +31,13 @@ MODELS_DIR = PROJECT_ROOT / "models"
 
 
 def order_metrics(test: pd.DataFrame, score_col: str, ascending: bool) -> dict:
-    podium_overlaps, spearmans, winner_hits = [], [], []
-    for (_, _), g in test.groupby(["year", "round"], sort=False):
-        g = g.copy()
-        g["pred_rank"] = g[score_col].rank(ascending=ascending, method="first")
+    """Backwards-compatible alias for src.metrics.race_metrics.
 
-        order = g.sort_values("pred_rank")
-        pred_podium = set(order.head(3)["driver"])
-        actual_podium = set(g.loc[(g["classified"] == 1) & (g["position"] <= 3), "driver"])
-        if actual_podium:
-            podium_overlaps.append(len(pred_podium & actual_podium) / 3.0)
-
-        actual_winner = g.loc[(g["classified"] == 1) & (g["position"] == 1), "driver"]
-        if len(actual_winner):
-            winner_hits.append(int(order.iloc[0]["driver"] == actual_winner.iloc[0]))
-
-        cls = g[g["classified"] == 1]
-        if len(cls) >= 3 and cls["pred_rank"].nunique() > 1:
-            spearmans.append(cls["pred_rank"].corr(cls["position"], method="spearman"))
-
-    return dict(
-        spearman=float(np.mean(spearmans)),
-        podium_precision=float(np.mean(podium_overlaps)),
-        winner_accuracy=float(np.mean(winner_hits)),
-        n_races=len(spearmans),
-    )
+    Retained so existing callers keep working. NOTE the returned keys changed
+    in increment 1.2: `podium_precision` is now `podium_overlap`, and the
+    single `spearman` split into `spearman_all` / `spearman_finishers`.
+    """
+    return race_metrics(test, score_col, ascending)
 
 
 def main():
@@ -68,26 +55,35 @@ def main():
     print("\n=================== RANKER EVALUATION ===================")
     print(f"Held-out test season: {latest}\n")
 
-    model_m = order_metrics(test, "rank_score", ascending=False)
-    grid_m = order_metrics(test, "grid_position", ascending=True)
+    model_m = race_metrics(test, "rank_score", ascending=False)
+    grid_m = race_metrics(test, "grid_position", ascending=True)
 
-    table = pd.DataFrame([model_m, grid_m], index=["rank_model", "grid_baseline"]).round(4)
-    print(f"Order metrics per race, averaged over {model_m['n_races']} races:")
-    print(table[["spearman", "podium_precision", "winner_accuracy"]].to_string())
+    table = pd.DataFrame([model_m, grid_m], index=["rank_model", "grid_baseline"])
+    print(f"Order metrics per race, over {model_m['n_races']} races:")
+    print(table[list(HEADLINE_COLS)].astype(float).round(4).to_string())
+    print("\nDenominators (races contributing to each metric):")
+    print(table[["n_races_winner", "n_races_podium",
+                 "n_races_spearman_finishers"]].to_string())
 
-    beats_spearman = model_m["spearman"] > grid_m["spearman"]
-    beats_podium = model_m["podium_precision"] > grid_m["podium_precision"]
+    beats_spearman = model_m["spearman_all"] > grid_m["spearman_all"]
+    beats_podium = model_m["podium_overlap"] > grid_m["podium_overlap"]
+    beats_winner = model_m["winner_accuracy"] > grid_m["winner_accuracy"]
     print("\nModel vs grid baseline:")
-    print(f"  spearman         : {'BEATS' if beats_spearman else 'DOES NOT BEAT'} baseline "
-          f"({model_m['spearman']:.4f} vs {grid_m['spearman']:.4f})")
-    print(f"  podium_precision : {'BEATS' if beats_podium else 'DOES NOT BEAT'} baseline "
-          f"({model_m['podium_precision']:.4f} vs {grid_m['podium_precision']:.4f})")
+    print(f"  winner_accuracy : {'BEATS' if beats_winner else 'DOES NOT BEAT'} baseline "
+          f"({model_m['winner_accuracy']:.4f} vs {grid_m['winner_accuracy']:.4f})")
+    print(f"  podium_overlap  : {'BEATS' if beats_podium else 'DOES NOT BEAT'} baseline "
+          f"({model_m['podium_overlap']:.4f} vs {grid_m['podium_overlap']:.4f})")
+    print(f"  spearman_all    : {'BEATS' if beats_spearman else 'DOES NOT BEAT'} baseline "
+          f"({model_m['spearman_all']:.4f} vs {grid_m['spearman_all']:.4f})")
 
     if beats_spearman and beats_podium:
         print("\nPASS -- ranker adds value over the grid order.")
     else:
         print("\nFAIL / NULL RESULT -- ranker does not beat the grid baseline on both "
               "metrics. Do not trust its predicted order/podium over grid order yet.")
+    print("\nNOTE: winner accuracy is the project's stated objective but is NOT yet "
+          "part of the pass condition. The promotion gate is defined in "
+          "FIX_PLAN.md section 8 and lands with the milestone 2 harness.")
     print("==========================================================")
 
 

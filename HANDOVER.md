@@ -7,7 +7,7 @@ Claude session and it should be able to continue without re-reading everything.
 any milestone lands. Keep it current, not comprehensive — detail lives in
 `REASONING.md` and `FIX_PLAN.md`.
 
-**Last updated:** 2026-09-11 — session 1 (increments 0.1 and 1.1 done)
+**Last updated:** 2026-09-11 — session 1 (increments 0.1, 1.1, 1.2 done)
 
 ---
 
@@ -98,10 +98,11 @@ The "~85%" figure that circulated is the classifier's **validation AUC
 5. ~~**Label semantics.**~~ **FIXED in 1.1** — `src/labels.py`. Note the flag was
    99.90% constant (2078/2080), worse than FIX_PLAN recorded. Consumers not yet
    migrated (increment 1.2).
-6. **Order-dependent output.** `rank(method='first')` ties break on row order;
-   shuffling rows moves Spearman 0.5005 -> 0.5187.
-7. **`top1_hit` is misnamed** — true when the top pick finishes anywhere in the
-   top 10, not P1.
+6. ~~**Order-dependent output.**~~ **FIXED in 1.2** - deterministic tie policy
+   (score, grid, driver id) in `src/metrics.py`, applied to metrics AND to the
+   blend/inference path. Shuffle spread now exactly 0.0 (was 0.0080).
+7. ~~**`top1_hit` is misnamed**~~ **FIXED in 1.2** — now
+   `top_pick_finished_top10`.
 
 **P1 — why it does not beat the baseline:**
 
@@ -126,7 +127,7 @@ fitted imputation state, or serving parity.
 | # | Milestone | Status |
 | --- | --- | --- |
 | 0 | Preserve & reproduce: baseline.json, manifest, dep lock, README refresh | **0.1 DONE** (README refresh deferred to M1) |
-| 1 | Correct contracts & replay: weather, fitted state, labels, shared as-of path, deterministic ties | **1.1 DONE** (labels); 1.2-1.5 pending |
+| 1 | Correct contracts & replay: weather, fitted state, labels, shared as-of path, deterministic ties | **1.1 + 1.2 DONE** (labels, metrics, determinism); weather / fitted state / one-path pending |
 | 2 | Evaluation harness: `backtest.py`, `metrics.py`, real winner gates | NOT STARTED |
 | 3 | Qualifying & car features: `qualifying.py`, `ratings.py` | NOT STARTED |
 | 4 | Model comparison M0-M4 (+ Plackett-Luce, winner/podium heads) | NOT STARTED |
@@ -180,11 +181,16 @@ commit message; the user executes all git operations. See `INSTRUCTIONS.md`.
 Backfill: `python -m src.labels` -> `data/raw_results_labeled.parquet`.
 `finished_top10` changed on 0 rows; frozen artifact hash unchanged.
 
-**Next action:** increment 1.2 — migrate downstream consumers off the
-deprecated `classified` flag (`train_rank.py` relevance, `evaluate.py` and
-`evaluate_rank.py` Spearman filters, `columns.py` ID_COLS). This DOES change
-model inputs and metric denominators, so `reports/baseline.json` is the
-comparison point.
+**Increment 1.2 complete (uncommitted):** `src/metrics.py` + 17 tests; evaluate,
+evaluate_rank, blend_rank, predict migrated; `baseline.py` pinned to private
+legacy copies so the frozen record cannot drift. Row-shuffle spread 0.0080 -> 0.0.
+Winner/podium/top-10 unchanged; only tied-score methods' Spearman moved.
+
+**Next action:** increment 1.3 — `train_rank.py` relevance off the deprecated
+`classified` (303 of 305 retirements currently get position-based relevance),
+plus `columns.py` ID_COLS. This forces a RETRAIN, so it is the first increment
+that changes a model artifact. Decide first whether to write new model files or
+keep the frozen ones alongside.
 
 ---
 

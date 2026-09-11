@@ -31,10 +31,12 @@ import joblib
 import numpy as np
 import pandas as pd
 
+from .blend_rank import add_blended_score
 from .build_features import add_recent_form, add_reliability
 from .circuit import add_circuit_history
 from .columns import FEATURE_COLS, TARGET
 from .leakage import sort_frame
+from .metrics import pred_rank_by_race
 from .teammate import add_teammate_features
 from .weather import add_weather_affinity
 
@@ -172,11 +174,15 @@ def predict(year: int, rnd: int, grid_overrides: dict[str, int] | None = None,
     race["p_top10"] = clf.predict_proba(combined.loc[target_mask, FEATURE_COLS])[:, 1]
     race["rank_score"] = ranker.predict(combined.loc[target_mask, FEATURE_COLS])
 
-    grid_rank = race["grid_position"].rank(ascending=True, method="first")
-    model_rank = race["rank_score"].rank(ascending=False, method="first")
-    race["blend_score"] = alpha * grid_rank + (1 - alpha) * model_rank
+    # One race, so the frame needs the race keys for the shared per-race
+    # helper. Deterministic ties matter more here than anywhere else: this is
+    # the published forecast, and the inherited rank(method='first') made it
+    # depend on the order the roster happened to arrive in.
+    race["year"], race["round"] = year, rnd
+    race["blend_score"] = add_blended_score(race, "rank_score", alpha)
 
-    out = race.sort_values("blend_score", ascending=True).reset_index(drop=True)
+    out = (race.assign(_order=pred_rank_by_race(race, "blend_score", ascending=True))
+               .sort_values("_order").reset_index(drop=True))
     out.insert(0, "pred_finish_rank", out.index + 1)
     out["predicted_podium"] = out["pred_finish_rank"] <= 3
     return out[["pred_finish_rank", "driver", "team", "grid_position",

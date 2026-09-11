@@ -373,4 +373,108 @@ confirms increment 1.1 did not perturb any baseline metric.
 
 ---
 
+## [004] Correct evaluation semantics and make ordering deterministic
+
+**Date:** 2026-09-11 - **Milestone:** 1 (increment 1.2) - **Files:**
+`src/metrics.py` (new), `tests/test_metrics.py` (new), `src/evaluate.py`,
+`src/evaluate_rank.py`, `src/blend_rank.py`, `src/predict.py`, `src/baseline.py`
+**Status:** implemented
+
+### Before
+
+`evaluate.ranking_metrics` and `evaluate_rank.order_metrics` were near-duplicate
+loops. Both ordered drivers with pandas `rank(method="first")`, took
+winner/podium from ad-hoc `(classified == 1) & (position <= k)` tests, computed
+one `spearman` over every row holding a result place, and returned a single
+`n_races` that did not match each metric's real denominator.
+`blend_rank.add_blended_score` and `predict.py` used the same ranking call.
+
+### After
+
+`src/metrics.py` owns all of it: `assign_pred_rank` / `pred_rank_by_race` apply
+one deterministic tie policy, and `race_metrics` returns `winner_accuracy`,
+`podium_overlap`, `top10_overlap`, `top_pick_finished_top10`, `spearman_all`,
+`spearman_finishers` and a per-metric race count. The two evaluate modules keep
+their old function names as thin aliases. The blend and the inference path use
+the shared deterministic ranker.
+
+### Why
+
+- **The forecast itself was order-dependent, not just its score.** The defect
+  was recorded as a metric artefact, but grepping for the ranking call found it
+  in `blend_rank.add_blended_score` and `predict.py` too. Those feed the
+  published output, so an identical entry list in a different order produced a
+  different predicted podium. Fixing only the metrics would have left the
+  forecast unreproducible while making the reported numbers look clean.
+- **The tie policy uses only pre-race information**: score, then grid position
+  known at the cutoff, then driver id. Driver is unique within a race, so this
+  is a total order and the result depends solely on which rows are present.
+- **Winner and podium now come from explicit labels** ([002]) rather than from
+  a flag that is true for 99.9% of rows.
+- **One Spearman could not mean two things.** The inherited metric covered all
+  entries against the published order while `README.md` described it as
+  finishers-only. Both are legitimate, so both are reported with separate
+  denominators and neither can be quoted with the wrong meaning.
+- **`top1_hit_rate` was renamed** to `top_pick_finished_top10`, which is what it
+  measures (FIX_PLAN.md section 2, P0-5).
+- **`baseline.py` was pinned to private copies** of the pre-correction metric
+  and blend functions. It previously imported them, so correcting those modules
+  would have made the provenance tool reproduce corrected numbers while claiming
+  to describe the legacy baseline - silently destroying the comparison.
+
+### Trade-offs / what this costs
+
+- **`rank_model`'s Spearman rose 0.5005 -> 0.5329 without the model improving.**
+  32% of its test rows (77 of 242) are tied, and the tie-break falls back to
+  grid order, so a model that cannot separate two drivers now inherits the grid
+  baseline's ordering there. That is the correct policy - grid is legitimate
+  pre-race information - but the gain must not be read as a modelling gain. The
+  legacy 0.5005 was one arbitrary draw from a 0.5005-0.5187 range.
+- **The blend's numbers moved in both directions** (top-10 overlap
+  0.7545 -> 0.7455, Spearman 0.6289 -> 0.6416) because the blend itself changed,
+  not merely its measurement. The legacy values were partly an artefact of row
+  order.
+- **Alias functions are debt.** `ranking_metrics` and `order_metrics` survive
+  with changed return keys, which is a silent breaking change for any unmigrated
+  caller. All in-repo callers were migrated; the aliases exist so the diff stays
+  reviewable.
+- **`blend_rank` no longer writes by default.** It needs `--write`, because the
+  alpha it saves is hashed in `reports/baseline.json` and was previously
+  rewritten as a side effect of merely inspecting the sweep.
+- `make_synthetic.py` still uses the old ranking call. Left alone: it generates
+  fixture data from continuous floats and is not a forecast path.
+
+### Verification
+
+- 70 tests pass (17 new in `tests/test_metrics.py`).
+- **The recorded defect is closed.** On the real 2026 test season, Spearman
+  spread across five row shuffles is exactly `0.0000000000` for all four
+  ordering methods, against the `0.0080` in `reports/baseline.json`.
+- Winner accuracy, podium overlap and top-10 overlap are **unchanged** for
+  grid_baseline, top10_classifier and rank_model, confirming the label
+  corrections did not silently move the headline numbers.
+- Only the two ordering methods with tied scores changed their Spearman.
+  Verified as the cause: `rank_score` has 77 tied rows of 242 and `blend_score`
+  29, while `grid_position` and `p_top10` have zero - and those two are exactly
+  the methods whose metrics did not move.
+- `python -m src.baseline` still reports "NONE (metrics identical)" against the
+  frozen record, proving the pinned legacy copies are faithful.
+- Re-running the alpha sweep with corrected metrics still selects **0.6**, so
+  `models/blend_alpha.json` needs no change.
+
+### Not done in this increment
+
+- `train_rank.py` still derives relevance from `classified`, so 303 of 305
+  retirements keep position-based relevance. Fixing it changes model inputs and
+  forces a retrain.
+- `columns.py` ID_COLS still lists the deprecated `classified`.
+- Evaluation still exits 0 on failure (FIX_PLAN.md section 2, P1); belongs with
+  the milestone 2 harness.
+- Alpha is still selected by Spearman rather than winner/podium (P1). A
+  deliberate omission: changing the objective is a modelling decision, not a
+  correctness fix, and bundling it here would have made the metric movements
+  impossible to attribute.
+
+---
+
 <!-- Append new entries above this line, newest last. -->

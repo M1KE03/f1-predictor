@@ -4,10 +4,13 @@ Writes reports/baseline.json: a provenance record binding the current dataset
 and model artifacts (by SHA-256) to the metrics they produce, so that every
 later change can be measured against a known starting point.
 
-This module deliberately reproduces LEGACY behaviour, flaws included. It calls
-the existing evaluate.ranking_metrics / evaluate_rank.order_metrics rather than
-reimplementing them, because the point is to record what the project scores
-TODAY, not what it should score. The recorded numbers are NOT a clean estimate
+This module deliberately reproduces LEGACY behaviour, flaws included, because
+the point is to record what the project scored BEFORE the corrections, not what
+it should score. The pre-correction metric functions are pinned as private
+copies below rather than imported from evaluate.py / evaluate_rank.py, so that
+correcting those modules can never silently rewrite the historical record.
+
+The recorded numbers are NOT a clean estimate
 of live forecasting quality -- they are measured on features that include
 race-session weather and globally-fitted imputation, i.e. information that is
 not available before lights-out. See FIX_PLAN.md section 2.
@@ -32,10 +35,7 @@ import joblib
 import numpy as np
 import pandas as pd
 
-from .blend_rank import add_blended_score
 from .columns import FEATURE_COLS, TARGET
-from .evaluate import ranking_metrics
-from .evaluate_rank import order_metrics
 
 log = logging.getLogger("baseline")
 
@@ -70,6 +70,83 @@ PINNED_PACKAGES = ("fastf1", "lightgbm", "pandas", "numpy", "scikit-learn",
                    "pyarrow", "joblib", "matplotlib")
 
 SHUFFLE_SEEDS = (0, 1, 2, 3, 4)
+
+
+# ---------------------------------------------------------------------------
+# FROZEN COPIES of the pre-correction metric functions.
+#
+# These were originally imported from evaluate.py / evaluate_rank.py. Once
+# those modules were corrected (increment 1.2: explicit labels, deterministic
+# ties, separated denominators) the import would have made this recorder
+# reproduce CORRECTED numbers while claiming to describe the legacy baseline.
+#
+# A provenance tool must not change when the code it measures changes, so the
+# legacy behaviour is pinned here verbatim -- misleading `top1_hit_rate` name,
+# row-order-dependent rank(method='first') and all. Do not "fix" these.
+# ---------------------------------------------------------------------------
+def _legacy_add_blended_score(df: pd.DataFrame, model_score_col: str,
+                              alpha: float) -> pd.Series:
+    """Pinned copy of the pre-correction blend (row-order dependent)."""
+    grid_rank = df.groupby(["year", "round"])["grid_position"].rank(
+        ascending=True, method="first")
+    model_rank = df.groupby(["year", "round"])[model_score_col].rank(
+        ascending=False, method="first")
+    return alpha * grid_rank + (1 - alpha) * model_rank
+
+
+def _legacy_ranking_metrics(test: pd.DataFrame, score_col: str,
+                            ascending: bool) -> dict:
+    overlaps, spearmans, top1_hits = [], [], []
+    for (_, _), g in test.groupby(["year", "round"], sort=False):
+        g = g.copy()
+        g["pred_rank"] = g[score_col].rank(ascending=ascending, method="first")
+
+        order = g.sort_values("pred_rank")
+        pred_top10 = set(order.head(10)["driver"])
+        actual_top10 = set(g.loc[g[TARGET] == 1, "driver"])
+        overlaps.append(len(pred_top10 & actual_top10) / 10.0)
+
+        top1_hits.append(int(order.iloc[0][TARGET] == 1))
+
+        cls = g[g["classified"] == 1]
+        if len(cls) >= 3 and cls["pred_rank"].nunique() > 1:
+            spearmans.append(cls["pred_rank"].corr(cls["position"], method="spearman"))
+
+    return dict(
+        set_overlap=float(np.mean(overlaps)),
+        spearman=float(np.mean(spearmans)),
+        top1_hit_rate=float(np.mean(top1_hits)),
+        n_races=len(overlaps),
+    )
+
+
+def _legacy_order_metrics(test: pd.DataFrame, score_col: str,
+                          ascending: bool) -> dict:
+    podium_overlaps, spearmans, winner_hits = [], [], []
+    for (_, _), g in test.groupby(["year", "round"], sort=False):
+        g = g.copy()
+        g["pred_rank"] = g[score_col].rank(ascending=ascending, method="first")
+
+        order = g.sort_values("pred_rank")
+        pred_podium = set(order.head(3)["driver"])
+        actual_podium = set(g.loc[(g["classified"] == 1) & (g["position"] <= 3), "driver"])
+        if actual_podium:
+            podium_overlaps.append(len(pred_podium & actual_podium) / 3.0)
+
+        actual_winner = g.loc[(g["classified"] == 1) & (g["position"] == 1), "driver"]
+        if len(actual_winner):
+            winner_hits.append(int(order.iloc[0]["driver"] == actual_winner.iloc[0]))
+
+        cls = g[g["classified"] == 1]
+        if len(cls) >= 3 and cls["pred_rank"].nunique() > 1:
+            spearmans.append(cls["pred_rank"].corr(cls["position"], method="spearman"))
+
+    return dict(
+        spearman=float(np.mean(spearmans)),
+        podium_precision=float(np.mean(podium_overlaps)),
+        winner_accuracy=float(np.mean(winner_hits)),
+        n_races=len(spearmans),
+    )
 
 
 def sha256(path: Path) -> str | None:
@@ -165,7 +242,7 @@ def scored_test_frame(df: pd.DataFrame) -> tuple[pd.DataFrame, int, float]:
 
     test["p_top10"] = clf.predict_proba(test[FEATURE_COLS])[:, 1]
     test["rank_score"] = ranker.predict(test[FEATURE_COLS])
-    test["blend_score"] = add_blended_score(test, "rank_score", alpha)
+    test["blend_score"] = _legacy_add_blended_score(test, "rank_score", alpha)
     return test, latest, alpha
 
 
@@ -188,8 +265,8 @@ def ordering_metrics(test: pd.DataFrame) -> dict[str, dict[str, float]]:
     """
     out: dict[str, dict[str, float]] = {}
     for name, (col, ascending) in ORDERINGS.items():
-        out[name] = {**order_metrics(test, col, ascending),
-                     **ranking_metrics(test, col, ascending)}
+        out[name] = {**_legacy_order_metrics(test, col, ascending),
+                     **_legacy_ranking_metrics(test, col, ascending)}
     return out
 
 
@@ -207,7 +284,7 @@ def shuffle_sensitivity(test: pd.DataFrame,
         spearmans = []
         for seed in seeds:
             shuffled = test.sample(frac=1.0, random_state=seed)
-            spearmans.append(order_metrics(shuffled, col, ascending)["spearman"])
+            spearmans.append(_legacy_order_metrics(shuffled, col, ascending)["spearman"])
         per_method[name] = {
             "seeds": list(seeds),
             "spearman_per_seed": [float(s) for s in spearmans],

@@ -20,6 +20,7 @@ from sklearn.metrics import (average_precision_score, brier_score_loss,
                              confusion_matrix, log_loss, roc_auc_score)
 
 from .columns import FEATURE_COLS, TARGET
+from .metrics import HEADLINE_COLS, race_metrics
 
 log = logging.getLogger("evaluate")
 
@@ -30,34 +31,19 @@ REPORTS_DIR = PROJECT_ROOT / "reports"
 
 
 # ---------------------------------------------------------------------------
-# 5.2 Ranking metrics, computed per race then averaged
+# 5.2 Ranking metrics -- now delegated to src.metrics (increment 1.2), which
+# applies the deterministic tie policy, takes winner/podium from explicit
+# labels, and reports separate Spearman denominators.
 # ---------------------------------------------------------------------------
 def ranking_metrics(test: pd.DataFrame, score_col: str, ascending: bool) -> dict:
-    overlaps, spearmans, top1_hits = [], [], []
-    for (_, _), g in test.groupby(["year", "round"], sort=False):
-        g = g.copy()
-        # rank 1 = strongest predicted driver
-        g["pred_rank"] = g[score_col].rank(ascending=ascending, method="first")
+    """Backwards-compatible alias for src.metrics.race_metrics.
 
-        order = g.sort_values("pred_rank")
-        pred_top10 = set(order.head(10)["driver"])
-        actual_top10 = set(g.loc[g[TARGET] == 1, "driver"])
-        overlaps.append(len(pred_top10 & actual_top10) / 10.0)
-
-        top1_hits.append(int(order.iloc[0][TARGET] == 1))
-
-        # Spearman between predicted rank and actual finishing position,
-        # on classified drivers (DNFs have no finishing position).
-        cls = g[g["classified"] == 1]
-        if len(cls) >= 3 and cls["pred_rank"].nunique() > 1:
-            spearmans.append(cls["pred_rank"].corr(cls["position"], method="spearman"))
-
-    return dict(
-        set_overlap=float(np.mean(overlaps)),
-        spearman=float(np.mean(spearmans)),
-        top1_hit_rate=float(np.mean(top1_hits)),
-        n_races=len(overlaps),
-    )
+    NOTE the returned keys changed in increment 1.2: `set_overlap` is now
+    `top10_overlap`, the misleading `top1_hit_rate` is now
+    `top_pick_finished_top10`, and `spearman` split into `spearman_all` /
+    `spearman_finishers`.
+    """
+    return race_metrics(test, score_col, ascending)
 
 
 def feature_importance_plot(clf) -> Path:
@@ -104,18 +90,22 @@ def main():
     model_m = ranking_metrics(test, "p_top10", ascending=False)
     grid_m = ranking_metrics(test, "grid_position", ascending=True)
 
-    table = pd.DataFrame([model_m, grid_m],
-                         index=["model", "grid_baseline"]).round(4)
-    print(f"\nRanking metrics per race, averaged over {model_m['n_races']} races:")
-    print(table[["set_overlap", "spearman", "top1_hit_rate"]].to_string())
+    table = pd.DataFrame([model_m, grid_m], index=["model", "grid_baseline"])
+    print(f"\nRanking metrics per race, over {model_m['n_races']} races:")
+    print(table[list(HEADLINE_COLS)].astype(float).round(4).to_string())
+    print("\nDenominators (races contributing to each metric):")
+    print(table[["n_races_winner", "n_races_podium",
+                 "n_races_spearman_finishers"]].to_string())
 
-    beats_overlap = model_m["set_overlap"] > grid_m["set_overlap"]
-    beats_spearman = model_m["spearman"] > grid_m["spearman"]
+    beats_overlap = model_m["top10_overlap"] > grid_m["top10_overlap"]
+    beats_spearman = model_m["spearman_all"] > grid_m["spearman_all"]
     print("\nModel vs grid baseline:")
-    print(f"  set-overlap : {'BEATS' if beats_overlap else 'DOES NOT BEAT'} baseline "
-          f"({model_m['set_overlap']:.4f} vs {grid_m['set_overlap']:.4f})")
-    print(f"  spearman    : {'BEATS' if beats_spearman else 'DOES NOT BEAT'} baseline "
-          f"({model_m['spearman']:.4f} vs {grid_m['spearman']:.4f})")
+    print(f"  top10_overlap : {'BEATS' if beats_overlap else 'DOES NOT BEAT'} baseline "
+          f"({model_m['top10_overlap']:.4f} vs {grid_m['top10_overlap']:.4f})")
+    print(f"  spearman_all  : {'BEATS' if beats_spearman else 'DOES NOT BEAT'} baseline "
+          f"({model_m['spearman_all']:.4f} vs {grid_m['spearman_all']:.4f})")
+    print(f"  winner_acc    : {model_m['winner_accuracy']:.4f} vs "
+          f"{grid_m['winner_accuracy']:.4f}  (reported, not yet gated)")
 
     if beats_overlap and beats_spearman:
         print("\nGATE 3: PASS -- model adds value over the grid order.")
