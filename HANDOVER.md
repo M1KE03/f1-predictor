@@ -7,7 +7,7 @@ Claude session and it should be able to continue without re-reading everything.
 any milestone lands. Keep it current, not comprehensive — detail lives in
 `REASONING.md` and `FIX_PLAN.md`.
 
-**Last updated:** 2026-09-11 — session 1 (increments 0.1, 1.1-1.6 done; milestone 1 complete bar P0-4)
+**Last updated:** 2026-09-11 — session 1 (increments 0.1, 1.1-1.7 done; MILESTONE 1 COMPLETE)
 
 ---
 
@@ -92,8 +92,9 @@ The "~85%" figure that circulated is the classifier's **validation AUC
    (mean finish 10.4790, not 10.5982).
 3. ~~**Train/serve skew.**~~ **FIXED in 1.6** - one shared
    `features.build_asof_features()`. Replay parity test proves it.
-4. **Quali position treated as final grid.** `--from-quali` reads Q `Position`,
-   ignores penalties; missing drivers silently get a hard-coded pit start at 20.
+4. ~~**Quali position treated as final grid.**~~ **FIXED in 1.7** - `src/grid.py`
+   separates qualifying from grid, requires explicit pit starts, uses real field
+   size, and labels every snapshot confirmed/provisional/unavailable.
 5. ~~**Label semantics.**~~ **FIXED in 1.1** — `src/labels.py`. Note the flag was
    99.90% constant (2078/2080), worse than FIX_PLAN recorded. Consumers not yet
    migrated (increment 1.2).
@@ -126,7 +127,7 @@ fitted imputation state, or serving parity.
 | # | Milestone | Status |
 | --- | --- | --- |
 | 0 | Preserve & reproduce: baseline.json, manifest, dep lock, README refresh | **0.1 DONE** (README refresh deferred to M1) |
-| 1 | Correct contracts & replay: weather, fitted state, labels, shared as-of path, deterministic ties | **1.1-1.6 DONE**. Only P0-4 (quali-as-grid / invented pit starts) remains |
+| 1 | Correct contracts & replay: weather, fitted state, labels, shared as-of path, deterministic ties | **DONE** (1.1-1.7). All five P0 defects closed |
 | 2 | Evaluation harness: `backtest.py`, `metrics.py`, real winner gates | NOT STARTED |
 | 3 | Qualifying & car features: `qualifying.py`, `ratings.py` | NOT STARTED |
 | 4 | Model comparison M0-M4 (+ Plackett-Luce, winner/podium heads) | NOT STARTED |
@@ -171,8 +172,11 @@ committed by Claude - the user runs all git commands.
 | 1.3 | Ranker relevance on `officially_classified` | none measurable (1.8e-07) |
 | 1.4 | Removed 8 leaking weather features (30 -> 22) | classifier AUC **up** 0.7908 -> 0.8178 |
 | 1.5+1.6 | `preprocessing.FillPolicy` fitted on train only; `features.build_asof_features()` as the single path; README rewritten | ranker/blend Spearman **down**; classifier still up |
+| 1.7 | `src/grid.py` - qualifying vs grid separated, explicit pit starts, real field size, grid status | none (no retrain needed) |
 
-Test suite: **97 tests**, `python -m pytest`. The repo had none before 1.1.
+**Milestone 1 is complete: all five P0 defects are closed.**
+
+Test suite: **124 tests**, `python -m pytest`. The repo had none before 1.1.
 
 ### Artifact layout (IMPORTANT)
 
@@ -225,18 +229,25 @@ Two caveats that must travel with these numbers:
 
 ### Next action
 
-Two candidates; **milestone 2 is the one FIX_PLAN.md prescribes**.
+**Milestone 2: the evaluation harness.** This is the prescribed next step and
+the prerequisite for everything after it - the current 11-race test season
+cannot tell whether a feature or model change helped, because one race is 9.1
+percentage points of winner accuracy.
 
-- **Increment 1.7 (small, closes milestone 1): P0-4, the grid contract.**
-  `predict.py --from-quali` reads qualifying `Position` as the grid, ignoring
-  penalties, and silently assigns absent drivers a pit start hard-coded at 20
-  regardless of field size. Needs `qualifying_position` and `grid_position`
-  stored separately, explicit `pit_start`, real field size, and roster
-  validation. Cannot be end-to-end tested without network access.
-- **Milestone 2: the evaluation harness.** `src/backtest.py` with expanding
-  chronological folds, paired bootstrap intervals by race, prediction exports,
-  and non-zero exit on gate failure. This is the prerequisite for judging any
-  feature or model work, because the current 11-race season cannot.
+Per FIX_PLAN.md section 9, milestone 2:
+
+- `src/backtest.py` - expanding-window outer folds over full seasons, event-level
+  split manifests frozen before tuning, inner folds for hyperparameters and
+  early stopping.
+- Paired bootstrap intervals on model-minus-baseline differences, resampled BY
+  RACE (never by driver row - 22 entries are not 22 independent observations).
+- Prediction exports per fold, so errors can be diagnosed after the fact.
+- Real winner/podium promotion gates from FIX_PLAN.md section 8, and a non-zero
+  exit when a gate fails (evaluation currently prints failure and exits 0).
+
+Known gap to close when network is available: nobody has run
+`python -m src.predict` end to end since increment 1.7 changed its signature and
+grid handling. It needs FastF1 for the event schedule.
 
 ## 8. Update protocol
 

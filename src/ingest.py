@@ -20,6 +20,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from .grid import back_of_grid
 from .labels import derive_labels
 
 log = logging.getLogger("ingest")
@@ -153,6 +154,7 @@ def race_rows(session, event, year: int, rnd: int) -> pd.DataFrame:
         raise ValueError("empty results")
 
     wrow = weather_row(session)
+    field_size = len(res)
     date = pd.Timestamp(session.date)
     if date.tzinfo is not None:
         date = date.tz_localize(None)
@@ -162,7 +164,12 @@ def race_rows(session, event, year: int, rnd: int) -> pd.DataFrame:
     for _, r in res.iterrows():
         grid = r.get("GridPosition")
         pit_start = int(pd.isna(grid) or float(grid) == 0.0)
-        grid_position = 20.0 if pit_start else float(grid)  # spec 1.5
+        # Back of grid is the actual field size, not a constant 20. The dataset
+        # holds 19-, 20- and 22-car races and 2026 runs 22, so the inherited
+        # literal placed pit starters ahead of two real cars (FIX_PLAN.md
+        # section 2, P0-4). Existing stored rows are unaffected: all 15 of them
+        # fall in 20-car races.
+        grid_position = back_of_grid(field_size) if pit_start else float(grid)
 
         pos = r.get("Position")
         pos = float(pos) if pd.notna(pos) else np.nan
@@ -179,6 +186,7 @@ def race_rows(session, event, year: int, rnd: int) -> pd.DataFrame:
             team=canonical_team(r.get("TeamName")),
             grid_position=grid_position,
             pit_start=pit_start,
+            field_size=field_size,
             position=pos,
             status=status,
             # Raw source fields consumed by src.labels below. ClassifiedPosition

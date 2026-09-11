@@ -33,6 +33,7 @@ import pandas as pd
 
 from .blend_rank import add_blended_score
 from .columns import FEATURE_COLS
+from . import grid as grid_module
 from .features import build_asof_features
 from .metrics import pred_rank_by_race
 from .preprocessing import FillPolicy, assert_no_missing
@@ -84,7 +85,8 @@ def roster_from_session(year: int, rnd: int, session: str = "Q") -> pd.DataFrame
     )).drop_duplicates("driver")
 
 
-def predict(year: int, rnd: int, grid_overrides: dict[str, int] | None = None,
+def predict(year: int, rnd: int,
+            grid_snapshot: grid_module.GridSnapshot | None = None,
             roster: pd.DataFrame | None = None,
             models_dir: Path = MODELS_DIR) -> pd.DataFrame:
     import fastf1
@@ -122,24 +124,27 @@ def predict(year: int, rnd: int, grid_overrides: dict[str, int] | None = None,
 
     target_mask = (combined["year"] == year) & (combined["round"] == rnd)
 
-    # Unknown grid (quali hasn't run): assume each driver's recent qualifying
-    # form. form_avg_quali_3 is computed from PRIOR races only, so this is
-    # available even for this row.
+    entry_list = list(roster["driver"])
+    if grid_snapshot is None:
+        # Qualifying has not run and no grid was supplied. Fall back to each
+        # driver's recent qualifying form, and say so: this is a shape-of-the-
+        # field guess, not a grid. Ordering it through from_qualifying keeps
+        # positions unique and within the real field size, rather than the old
+        # round().clip(1, 22), which could repeat positions and hard-coded 22.
+        assumed = (combined.loc[target_mask]
+                   .set_index("driver")["form_avg_quali_3"].to_dict())
+        grid_snapshot = grid_module.from_qualifying(
+            entry_list, assumed, source="assumed-from-recent-form")
+        grid_snapshot.notes.append(
+            "No qualifying result and no supplied grid: order assumed from "
+            "form_avg_quali_3 (average of PRIOR starting grids).")
+    grid_snapshot.validate(entry_list)
+
+    positions = grid_snapshot.entries.set_index("driver")
     combined.loc[target_mask, "grid_position"] = (
-        combined.loc[target_mask, "form_avg_quali_3"].round().clip(1, 22)
-    )
-    if grid_overrides:
-        missing_drivers = set(grid_overrides) - set(combined.loc[target_mask, "driver"])
-        if missing_drivers:
-            raise ValueError(f"--grid has drivers not in the entry list: {missing_drivers}")
-        for drv, pos in grid_overrides.items():
-            combined.loc[target_mask & (combined["driver"] == drv), "grid_position"] = float(pos)
-        pit_lane = set(roster["driver"]) - set(grid_overrides)
-        if pit_lane:
-            log.warning("Drivers missing from --grid (treated as pit-lane start, grid=20): %s",
-                        pit_lane)
-            combined.loc[target_mask & combined["driver"].isin(pit_lane), "grid_position"] = 20.0
-            combined.loc[target_mask & combined["driver"].isin(pit_lane), "pit_start"] = 1
+        combined.loc[target_mask, "driver"].map(positions["grid_position"]).to_numpy())
+    combined.loc[target_mask, "pit_start"] = (
+        combined.loc[target_mask, "driver"].map(positions["pit_start"]).to_numpy())
 
     # The SAME fitted policy the model was trained with, replayed exactly --
     # including the driver-prior fallback the old serving path skipped, which
@@ -168,8 +173,44 @@ def predict(year: int, rnd: int, grid_overrides: dict[str, int] | None = None,
                .sort_values("_order").reset_index(drop=True))
     out.insert(0, "pred_finish_rank", out.index + 1)
     out["predicted_podium"] = out["pred_finish_rank"] <= 3
+    out.attrs["grid"] = grid_snapshot.to_dict()
     return out[["pred_finish_rank", "driver", "team", "grid_position",
                 "predicted_podium", "p_top10"]]
+
+
+def grid_from_cli(args, roster: pd.DataFrame) -> grid_module.GridSnapshot | None:
+    """Build the grid snapshot the CLI flags describe.
+
+    Returns None when nothing is known, which lets predict() fall back to an
+    explicitly-labelled assumed order.
+    """
+    entry_list = list(roster["driver"])
+    pit_starts = [d.strip() for d in (args.pit_start or "").split(",") if d.strip()]
+    cutoff = args.cutoff
+
+    if args.grid:
+        return grid_module.from_grid(
+            entry_list, {k: float(v) for k, v in json.loads(args.grid).items()},
+            pit_starts=pit_starts, source="manual --grid", cutoff_utc=cutoff)
+
+    if args.from_quali:
+        import fastf1
+        session = fastf1.get_session(args.year, args.round, "Q")
+        session.load(laps=False, telemetry=False, weather=False, messages=False)
+        qualifying = {str(a): float(pos) for a, pos in
+                      zip(session.results["Abbreviation"], session.results["Position"])
+                      if pd.notna(pos)}
+        # Qualifying classification is NOT the grid: penalties, exclusions and
+        # pit-lane starts are applied afterwards. The snapshot is labelled
+        # provisional so the output says so.
+        return grid_module.from_qualifying(
+            entry_list, qualifying, pit_starts=pit_starts,
+            source=f"{args.year} R{args.round} qualifying session",
+            cutoff_utc=cutoff)
+
+    if pit_starts:
+        raise SystemExit("--pit-start needs a grid: pass --grid or --from-quali.")
+    return None
 
 
 def main():
@@ -178,39 +219,61 @@ def main():
     ap.add_argument("--year", type=int, required=True)
     ap.add_argument("--round", type=int, required=True)
     ap.add_argument("--grid", type=str, default=None,
-                     help='JSON mapping driver abbreviation -> real grid position, '
-                          'e.g. \'{"ANT":1,"LEC":2}\'. Overrides the assumed grid.')
+                    help='JSON mapping driver abbreviation -> CONFIRMED grid '
+                         'position, e.g. \'{"ANT":1,"LEC":2}\'. Every driver in '
+                         'the entry list must appear, or be named in --pit-start.')
+    ap.add_argument("--pit-start", type=str, default=None,
+                    help="comma-separated abbreviations starting from the pit "
+                         "lane, e.g. HUL,STR. Must be stated explicitly: a "
+                         "driver missing from --grid is an error, not a pit start.")
+    ap.add_argument("--cutoff", type=str, default=None,
+                    help="forecast cutoff in UTC, recorded with the output "
+                         "(e.g. 2026-08-01T13:00:00Z)")
     ap.add_argument("--models-dir", type=Path, default=MODELS_DIR,
                     help="model bundle directory (default: models/)")
     ap.add_argument("--from-quali", action="store_true",
-                    help="pull the entry list AND the real grid from the "
-                         "target round's qualifying session (must have run)")
+                    help="take the entry list and a PROVISIONAL grid from the "
+                         "target round's qualifying session (must have run). "
+                         "Grid penalties applied after the session are not "
+                         "reflected -- pass --grid for the real starting order.")
     args = ap.parse_args()
 
-    grid_overrides = json.loads(args.grid) if args.grid else None
     roster = None
     if args.from_quali:
         import fastf1
         fastf1.Cache.enable_cache(str(PROJECT_ROOT / "cache"))
         roster = roster_from_session(args.year, args.round, "Q")
-        if grid_overrides is None:
-            q = fastf1.get_session(args.year, args.round, "Q")
-            q.load(laps=False, telemetry=False, weather=False, messages=False)
-            grid_overrides = {str(a): int(pos) for a, pos in
-                              zip(q.results["Abbreviation"], q.results["Position"])
-                              if pd.notna(pos)}
 
-    print("NOTE: pred_finish_rank/predicted_podium come from a grid-position + "
+    if roster is None:
+        raw = pd.read_parquet(DATA_DIR / "raw_results.parquet")
+        last_round = raw[raw["year"] == args.year]["round"].max()
+        roster = (raw[(raw["year"] == args.year) & (raw["round"] == last_round)]
+                  [["driver", "driver_id", "team"]].drop_duplicates("driver"))
+
+    try:
+        snapshot = grid_from_cli(args, roster)
+    except grid_module.GridError as exc:
+        raise SystemExit(f"GRID ERROR: {exc}")
+
+    out = predict(args.year, args.round, snapshot, roster, args.models_dir)
+    record = out.attrs["grid"]
+
+    print(f"\nGrid status : {record['status'].upper()}  "
+          f"(source: {record['source']}, field size {record['field_size']}, "
+          f"{record['n_pit_starts']} pit start(s))")
+    if record["cutoff_utc"]:
+        print(f"Cutoff (UTC): {record['cutoff_utc']}")
+    for note in record["notes"]:
+        print(f"  ! {note}")
+    if record["status"] != grid_module.CONFIRMED:
+        print("  ! This forecast is NOT made against a confirmed starting grid.")
+
+    print("\nNOTE: pred_finish_rank/predicted_podium come from a grid-position + "
           "learning-to-rank blend (src.blend_rank, alpha tuned on the validation "
           "season); p_top10 is the separate top-10 classifier's probability, "
           "shown for reference only -- it is not what the order is sorted by.")
-    if grid_overrides:
-        print("NOTE: using REAL qualifying grid passed via --grid.\n")
-    else:
-        print("NOTE: grid_position is ASSUMED (real qualifying result not yet "
-              "available) and weather is filled with training-set global means "
-              "(no forecast ingested).\n")
-    out = predict(args.year, args.round, grid_overrides, roster, args.models_dir)
+    print("NOTE: no weather input is used. Race-session weather was removed as "
+          "unavailable before lights-out (see README).\n")
     print(out.to_string(index=False))
 
 

@@ -812,4 +812,102 @@ better or worse.
 
 ---
 
+## [008] Separate qualifying order from the starting grid
+
+**Date:** 2026-09-11 - **Milestone:** 1 (increment 1.7) - **Files:**
+`src/grid.py` (new), `src/predict.py`, `src/ingest.py`,
+`tests/test_grid.py` (new)
+**Status:** implemented
+
+### Before
+
+```python
+pit_lane = set(roster["driver"]) - set(grid_overrides)
+combined.loc[..., "grid_position"] = 20.0
+combined.loc[..., "pit_start"] = 1
+```
+
+and, when `--from-quali` was used, the grid came from the Q session's
+`Position` column.
+
+### After
+
+`src/grid.py` defines a `GridSnapshot` carrying `qualifying_position` and
+`grid_position` as distinct fields, an explicit `pit_start` flag, a
+`confirmed` / `provisional` / `unavailable` status, and `to_dict()` provenance.
+`predict.py` builds one, validates it against the entry list, and prints the
+status above every forecast. `ingest.py` derives back-of-grid from the real
+field size.
+
+### Why
+
+Three separate defects, only the first of which FIX_PLAN.md called out plainly:
+
+- **Absence was read as intent.** A driver in the roster but missing from
+  `--grid` became a pit starter, silently. One mistyped abbreviation moved a
+  front-runner to the back and the forecast still printed a clean-looking
+  table. Absence is now an error naming the missing drivers, and a pit start
+  must be stated with `--pit-start`.
+- **Qualifying classification is not the grid.** Penalties, exclusions and
+  pit-lane decisions are applied after the session, which is precisely when a
+  forecast has most to gain from knowing the real order. The two fields are now
+  independent, and a quali-derived grid is labelled `provisional` with a note
+  saying penalties are not reflected. `test_confirmed_and_provisional_grids_can_disagree`
+  pins the case the old schema could not even represent.
+- **Back of grid was the literal 20.** The stored data holds 19-, 20- and
+  22-car races and 2026 runs 22, so a pit starter was being placed ahead of two
+  cars that were actually on the grid.
+
+The assumed-grid fallback also improved as a side effect. It was
+`form_avg_quali_3.round().clip(1, 22)`, which can assign the same position to
+two drivers and hard-codes 22. It now goes through `from_qualifying`, which
+guarantees unique positions within the real field size and labels the result.
+
+### Trade-offs / what this costs
+
+- **The stored dataset does not change.** All 15 pit-start rows happen to fall
+  in 20-car races, so the old literal was coincidentally correct. Checked
+  before writing the fix; the change matters for future ingestion and for
+  prediction, not retrospectively. No rebuild or retrain was needed, and no
+  metric moved.
+- **`--grid` is now stricter and will reject inputs the old CLI accepted.**
+  Intended: those inputs were producing quietly wrong forecasts.
+- **`predict()`'s signature changed** from `grid_overrides: dict` to
+  `grid_snapshot: GridSnapshot`. A breaking change for any external caller;
+  nothing in-repo passes the old argument.
+- **`field_size` is added to the ingest schema** but is absent from the stored
+  parquet, so anything consuming it must tolerate its absence until a
+  re-ingest.
+- **The end-to-end path is still untested.** `predict()` needs FastF1 for the
+  event schedule, so it cannot run without network access. The grid contract is
+  tested directly and the CLI layer is tested through `grid_from_cli` with a
+  stand-in args object, but nobody has run `python -m src.predict` against a
+  real race since this change. That gap is real and should be closed the first
+  time the user has network access.
+- `grid_status` is not yet persisted with a forecast record, because there is no
+  forecast record to persist it into - that arrives with the model bundle in
+  milestone 5. For now it is printed and attached to `out.attrs`.
+
+### Verification
+
+- 124 tests pass (27 new in `tests/test_grid.py`).
+- Two genuine bugs in the first draft of `grid.py` were caught by those tests
+  rather than by review: a roster driver missing from the grid map produced a
+  correct rejection but with a misleading message, and a driver present in the
+  grid map but absent from the roster was silently dropped because
+  `_entry_frame` iterates the roster. Both now raise named errors.
+- Stored data checked before the change: 15 pit-start rows, all in 20-car
+  races; field sizes across the dataset are 19 (x2), 20 (x90), 22 (x11); no
+  race has duplicate on-grid positions.
+- Frozen artifacts byte-intact; `python -m src.baseline` still reports "NONE
+  (metrics identical)".
+
+### Not done in this increment
+
+- Sprint-weekend grid handling.
+- Persisting the snapshot alongside an immutable forecast record (milestone 5).
+- An end-to-end run of `python -m src.predict` (needs network).
+
+---
+
 <!-- Append new entries above this line, newest last. -->
