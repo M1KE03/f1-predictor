@@ -44,6 +44,13 @@ FEATURE_COLS = [
     "quali_gap_to_teammate", "form_finish_vs_teammate", "teammate_available",
     # reliability / car
     "driver_dnf_rate", "team_dnf_rate", "constructor_standing_prior",
+    # Current-weekend qualifying pace (src/qualifying.py). Measured at the
+    # qualifying session, which ends before the forecast cutoff. Gaps are
+    # normalised WITHIN a segment, because the minimum across Q1/Q2/Q3 compares
+    # a Q1-eliminated driver's lap against another driver's Q3 lap.
+    "quali_gap_pct", "quali_gap_to_median_pct", "quali_pace_vs_teammate_pct",
+    "quali_stage_reached", "quali_field_spread_pct", "quali_no_time",
+    "q1_gap_pct",
 ]
 
 # ---------------------------------------------------------------------------
@@ -78,6 +85,10 @@ WEATHER_REMOVED = [
 # needed to build the historical wet-affinity subsets and to audit this change.
 # Being in ID_COLS is what guarantees it never reaches the model.
 ID_COLS += ["air_temp", "track_temp", "humidity", "wind_speed", "rainfall", "is_wet"]
+# Raw qualifying times: kept for auditing the normalised gaps built from them.
+# quali_best_s is the min across segments and is NOT comparable between drivers
+# -- it stays out of the model deliberately.
+ID_COLS += ["q1_s", "q2_s", "q3_s", "quali_best_s", "gap_to_pole_s"]
 
 assert not (set(FEATURE_COLS) & set(WEATHER_REMOVED)), \
     "Race-session weather must not re-enter FEATURE_COLS without a proven forecast source."

@@ -122,8 +122,16 @@ def _fold_from_races(df: pd.DataFrame, name: str, train_races: pd.DataFrame,
                 manifest=_manifest(name, train_races, val_races, test_races))
 
 
-def season_folds(df: pd.DataFrame, min_train_seasons: int = 2) -> list[Fold]:
-    """One fold per held-out season; the season before it is the inner validation."""
+def season_folds(df: pd.DataFrame, min_train_seasons: int = 2,
+                 train_from: int | None = None) -> list[Fold]:
+    """One fold per held-out season; the season before it is the inner validation.
+
+    `train_from` truncates the START of the training window, leaving the test
+    and validation seasons untouched. That is what makes an era comparison
+    fair: both arms are scored on exactly the same races and differ only in how
+    much history they were allowed to learn from (FIX_PLAN.md section 5.A.4,
+    "evaluate both 2018+ and recent-era windows").
+    """
     races = race_table(df)
     seasons = sorted(races["year"].unique())
     folds = []
@@ -131,9 +139,14 @@ def season_folds(df: pd.DataFrame, min_train_seasons: int = 2) -> list[Fold]:
         if i < min_train_seasons + 1:
             continue          # need training seasons plus one for inner validation
         val_year = seasons[i - 1]
+        train = races[races["year"] < val_year]
+        if train_from is not None:
+            train = train[train["year"] >= train_from]
+        if train["year"].nunique() < min_train_seasons:
+            continue          # not enough history left after truncation
         folds.append(_fold_from_races(
             df, name=f"season-{int(year)}",
-            train_races=races[races["year"] < val_year],
+            train_races=train,
             val_races=races[races["year"] == val_year],
             test_races=races[races["year"] == year]))
     return folds
@@ -241,6 +254,10 @@ def main() -> None:
                         default=DATA_DIR / "v2" / "features_prefill.parquet",
                         help="PRE-imputation frame; the policy is refitted per fold")
     parser.add_argument("--scheme", choices=[SEASON, ROLLING], default=ROLLING)
+    parser.add_argument("--train-from", type=int, default=None,
+                        help="earliest season allowed in TRAINING. Test and "
+                             "validation seasons are unchanged, so two runs "
+                             "with different values are directly comparable.")
     parser.add_argument("--min-train-races", type=int, default=44)
     parser.add_argument("--val-races", type=int, default=12)
     parser.add_argument("--block-races", type=int, default=6)
@@ -253,7 +270,7 @@ def main() -> None:
     prefill["date"] = pd.to_datetime(prefill["date"])
 
     if args.scheme == SEASON:
-        folds = make_folds(prefill, SEASON)
+        folds = make_folds(prefill, SEASON, train_from=args.train_from)
     else:
         folds = make_folds(prefill, ROLLING, min_train_races=args.min_train_races,
                            val_races=args.val_races, block_races=args.block_races)

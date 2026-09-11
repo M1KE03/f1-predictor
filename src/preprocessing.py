@@ -60,6 +60,13 @@ WEATHER_ZERO_FILL = ["rainfall", "is_wet"]
 DRIVER_PRIOR = "driver_overall_avg_finish"
 GRID_DEFAULT = 20.0
 
+# Features whose missingness is INFORMATION, not an absent measurement. A
+# driver with no Q3 time did not reach Q3; imputing a value would erase exactly
+# the fact the model should learn. LightGBM splits on NaN natively, which
+# FIX_PLAN.md section 5.A.7 prefers ("native missing-value handling where
+# suitable"). These are excluded from the no-NaN assertion.
+from .qualifying import NATIVE_MISSING  # noqa: E402
+
 
 @dataclass
 class FillPolicy:
@@ -166,9 +173,17 @@ class FillPolicy:
         return cls(**data)
 
 
-def assert_no_missing(df: pd.DataFrame, feature_cols: list[str]) -> None:
-    """Fail loudly if any model input is still NaN after transform."""
-    counts = df[feature_cols].isna().sum()
+def assert_no_missing(df: pd.DataFrame, feature_cols: list[str],
+                      allow_missing: tuple[str, ...] = NATIVE_MISSING) -> None:
+    """Fail loudly if any model input is UNEXPECTEDLY NaN after transform.
+
+    `allow_missing` names features whose NaN is deliberate and must reach the
+    model intact. Everything else must be filled: a NaN there means the policy
+    has a gap, and it would arrive at the model as an accident rather than a
+    decision.
+    """
+    checked = [c for c in feature_cols if c not in allow_missing]
+    counts = df[checked].isna().sum()
     bad = counts[counts > 0]
     if len(bad):
         raise AssertionError(f"NaNs remain in the feature matrix:\n{bad}")

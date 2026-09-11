@@ -146,15 +146,30 @@ def weather_row(session) -> dict:
 # GridPosition, which already reflects penalties.
 # ---------------------------------------------------------------------------
 def quali_frame(session_q) -> pd.DataFrame:
+    """Per-driver qualifying times, kept PER SEGMENT.
+
+    The inherited version stored only the minimum across Q1/Q2/Q3. That number
+    is not comparable between drivers: Q3 runs on fresher tyres, in better track
+    conditions and with a lower fuel load than Q1, so a driver eliminated in Q1
+    is being compared against another driver's Q3 lap. FIX_PLAN.md section 5.B
+    is explicit -- "do not treat the minimum across Q1/Q2/Q3 as universally
+    comparable" -- so each segment is retained and normalised within itself.
+
+    `quali_best_s` / `gap_to_pole_s` are kept for backwards compatibility but
+    should not be used as pace features.
+    """
     res = session_q.results
     out = res[["Abbreviation"]].copy()
-    best = pd.concat(
-        [pd.to_timedelta(res[c], errors="coerce").dt.total_seconds() for c in ("Q1", "Q2", "Q3")],
-        axis=1,
-    ).min(axis=1)
+
+    segments = {}
+    for name in ("Q1", "Q2", "Q3"):
+        seconds = pd.to_timedelta(res[name], errors="coerce").dt.total_seconds()
+        segments[name] = seconds
+        out[f"{name.lower()}_s"] = seconds.values
+
+    best = pd.concat(segments.values(), axis=1).min(axis=1)
     out["quali_best_s"] = best.values
-    pole = out["quali_best_s"].min()
-    out["gap_to_pole_s"] = out["quali_best_s"] - pole
+    out["gap_to_pole_s"] = (best - best.min()).values
     return out.rename(columns={"Abbreviation": "driver"})
 
 
