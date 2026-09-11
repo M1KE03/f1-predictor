@@ -7,7 +7,7 @@ Claude session and it should be able to continue without re-reading everything.
 any milestone lands. Keep it current, not comprehensive — detail lives in
 `REASONING.md` and `FIX_PLAN.md`.
 
-**Last updated:** 2026-09-11 — session 1 (milestones 0, 1 and 2 complete)
+**Last updated:** 2026-09-11 — session 1 (milestones 0-2 complete; 2018-2021 recovered, 186 races)
 
 ---
 
@@ -52,34 +52,33 @@ Three models, all sharing the 30 features in `src/columns.py`:
 
 ---
 
-## 3. Verified state of the data (checked 2026-09-11, not just claimed)
+## 3. Verified state of the data (checked 2026-09-11)
 
-- `data/raw_results.parquet` — 2,080 rows x 24 cols
-- `data/features.parquet` — 2,080 rows x 47 cols, 30 model features
-- Seasons **2022-2026** (NOT 2018+ as README claims), 103 races,
-  last race 2026-07-26
-- Split: train 2022-24 (1,359 rows / 68 races), val 2025, test 2026 (11 races)
-- Real driver codes (LEC, VER, ...) — this is real data, not `make_synthetic`
-- `quali_best_s` 98.9% populated **and unused** (not in `FEATURE_COLS`)
-- 303 rows have `is_dnf=1` AND `classified=1`, incl. 16 DNS and 10 Disqualified
+**`data/v2/raw_results.parquet` is the current dataset: 3,744 rows, 186 races,
+2018-2026.** Every season complete, no missing rounds, zero unknown statuses,
+and all rows carry `officially_classified` from the authoritative FastF1
+`ClassifiedPosition`.
 
-### The headline problem
+| Season | Rows | Races | | Season | Rows | Races |
+| --- | ---: | ---: | --- | --- | ---: | ---: |
+| 2018 | 420 | 21 | | 2023 | 440 | 22 |
+| 2019 | 420 | 21 | | 2024 | 479 | 24 |
+| 2020 | 340 | 17 | | 2025 | 479 | 24 |
+| 2021 | 440 | 22 | | 2026 | 286 | 13 |
+| 2022 | 440 | 22 | | | | |
 
-The blend picks **exactly the same winners as the raw starting grid** (8/11 on
-the 2026 test races). Podium overlap identical. The ML stack currently adds
-nothing over "sort by grid position" for winner/podium.
+DNF rate 0.1536, target mean 0.4968. Field sizes 19-22.
 
-| Ordering method | Winner | Podium overlap | Top-10 overlap | Spearman |
-| --- | ---: | ---: | ---: | ---: |
-| Starting grid | 8/11 | 57.6% | 73.6% | 0.6432 |
-| Top-10 classifier | 3/11 | 48.5% | 75.5% | 0.5672 |
-| LambdaRank alone | 6/11 | 57.6% | 69.1% | 0.5005 |
-| Saved blend (a=0.6) | 8/11 | 57.6% | 75.5% | 0.6289 |
+`data/raw_results.parquet` (frozen legacy) is the OLD 103-race 2022-2026
+dataset. It is kept only so `reports/baseline.json` stays reproducible; do not
+use it for new work.
 
-The "~85%" figure that circulated is the classifier's **validation AUC
-(0.8455)**, not accuracy of finishing positions.
+### Superseded
 
----
+`reports/baseline.json` describes 103 races of 2022-2026 and is **no longer
+comparable** to the corrected pipeline, which now runs on 186 races of
+2018-2026. The legacy-vs-corrected comparisons recorded in REASONING entries
+[006] and [007] are superseded.
 
 ## 4. Faults to fix (condensed from FIX_PLAN.md §2)
 
@@ -191,39 +190,68 @@ Test suite: **149 tests**, `python -m pytest`.
 - `data/v2/`, `models/v2/` - **current corrected pipeline**. A working area, not
   a version history.
 
-Full rebuild command sequence is in `README.md`.
+Full rebuild from the recovered data:
 
-### THE HEADLINE FINDING (changed by milestone 2)
+```
+python -m src.merge_raw data/v2/raw_2018_2019.parquet \
+                        data/v2/raw_2020_2021.parquet \
+                        data/v2/raw_2022_2026.parquet \
+                        --out data/v2/raw_results.parquet
+python -m src.build_features --raw data/v2/raw_results.parquet --out-dir data/v2
+python -m src.audit_leakage  --data-dir data/v2 --raw data/v2/raw_results.parquet
+python -m src.backtest --scheme season --out-dir reports/backtest_season
+python -m src.gates    --backtest-dir reports/backtest_season
+```
 
-Backtested over **8 folds / 47 races**, paired against the grid baseline with
-95% intervals from 10,000 race-level bootstrap resamples:
+NOTE the environment HAS network access to FastF1. Jolpica rate-limits at 500
+calls/hour; ingestion now aborts on that rather than skipping, and cached races
+cost no calls, so a resume is cheap.
 
-| candidate | winner accuracy vs grid | resolves? |
-| --- | ---: | --- |
-| blend | **-0.0851** [-0.1702, -0.0213] | YES |
-| rank_model | **-0.2128** [-0.3404, -0.0851] | YES |
-| top10_classifier | **-0.4468** [-0.6383, -0.2553] | YES |
+### THE HEADLINE FINDING (corrected on full history)
 
-Pooled winner accuracy: grid **0.6170**, blend 0.5319, rank_model 0.4043,
-classifier 0.1702.
+Backtested over **6 season folds / 127 races (2018-2026)**, paired against the
+grid baseline with 95% intervals from 10,000 race-level bootstrap resamples:
 
-**The models are not merely no better than the grid - they are significantly
-WORSE at picking winners.** The single 11-race season showed the blend tying
-grid at 8/11, which read as "adds nothing". Over 47 races the sign resolves and
-the interval excludes zero. That tie was a small-sample artefact.
+| method | winner | podium | top-10 | spearman (all) | spearman (finishers) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| grid_baseline | 0.5591 | 0.6693 | 0.7701 | 0.6305 | 0.7637 |
+| top10_classifier | 0.3543 | 0.5774 | 0.7866 | 0.6624 | 0.7999 |
+| rank_model | 0.5591 | 0.6483 | 0.7764 | 0.6419 | 0.7901 |
+| blend | 0.5669 | 0.6667 | 0.7843 | 0.6622 | 0.8029 |
 
-The blend does buy better ordering: spearman +0.0184 [+0.0040, +0.0333]
-(resolves), podium +0.0142 [-0.0213, +0.0496] (does not). It trades winner
-accuracy for Spearman - exactly the objective mismatch FIX_PLAN.md flags as P1,
-since alpha is SELECTED by Spearman.
+Paired vs grid, winner accuracy:
 
-`python -m src.gates` exits 1. No candidate passes.
+- blend **+0.0079** [-0.0236, +0.0394] - does NOT resolve
+- rank_model **+0.0000** [-0.0945, +0.0945] - does NOT resolve
+- top10_classifier **-0.2047** [-0.3150, -0.0945] - resolves, worse
+
+**The blend is statistically indistinguishable from the grid baseline at
+picking winners.** It DOES resolve as better on the guardrails: top-10 overlap
++0.0142 [+0.0039, +0.0244] and spearman +0.0317 [+0.0200, +0.0436].
+
+### RETRACTED
+
+An earlier backtest (8 rolling folds, 47 races, 2022-2026 only) reported the
+blend as **significantly worse** at picking winners (-0.0851, CI excluding
+zero). **That does not replicate on 186 races.** Running the same rolling scheme
+on the full data gives +0.0154 [-0.0231, +0.0538], so the cause was the narrow
+DATA WINDOW, not the fold scheme.
+
+Note grid winner accuracy is 0.5591 over 127 races against 0.7273 over the 11
+races of 2026 alone - that season was unusually grid-predictable. Two confident
+conclusions in this project have now come from too-small samples. Treat "the
+interval excludes zero" as necessary but not sufficient when the window is
+narrow.
+
+`python -m src.gates` still exits 1, but the reason changed: the VOLUME gates
+now pass (6 folds, 127 races) and the failures are the winner/podium thresholds
+themselves.
 
 Reproduce:
 
 ```
-python -m src.backtest --scheme rolling
-python -m src.gates
+python -m src.backtest --scheme season --out-dir reports/backtest_season
+python -m src.gates --backtest-dir reports/backtest_season
 ```
 
 ### Guards in place
@@ -246,27 +274,29 @@ python -m src.gates
 
 ### Next action
 
-**Re-ingest 2018-2021 first.** This is now the highest-value pending task, and
-the environment DOES have network access.
+**Milestone 3: qualifying and car features.** The harness and the data are now
+in place to measure a change honestly, which they were not before.
 
-- 47 evaluated races is below FIX_PLAN.md section 8's 60-race target, so the
-  race-count gate fails for every candidate and no promotion decision can be
-  made on the current data at all.
-- It also enables season folds (currently only 2 possible) instead of the
-  partial-season rolling blocks.
-- Expect it to be slow: roughly 4 seasons x 21 races x 2 sessions of FastF1
-  downloads. Run `python -m src.ingest --start-year 2018 --end-year 2021`,
-  then rebuild and re-backtest.
+First and most obvious: `quali_best_s` and `gap_to_pole_s` are ingested, ~99%
+populated and NOT in `FEATURE_COLS`. For a forecast made after qualifying that
+is the single most obvious missing signal. FIX_PLAN.md section 5.B specifies
+per-segment normalisation (compare within Q1/Q2/Q3, not a raw minimum across
+them).
 
-**Then milestone 3: qualifying and car features.** `quali_best_s` and
-`gap_to_pole_s` are ingested, 98.9% populated and unused - the single most
-obvious missing signal for a post-qualifying forecast. The backtest harness now
-exists to measure whether they help.
+Two other things worth doing early:
 
-Also worth doing early, given the finding above: alpha is selected by Spearman
-while the objective is winner/podium (FIX_PLAN.md P1). The backtest shows this
-mismatch is not theoretical - the blend buys Spearman by giving up winner
-accuracy.
+1. **Measure whether 2018-2021 helps.** It is a different era - cars, tyres,
+   points, a 17-race COVID season. FIX_PLAN.md section 5.A.4 warns older data is
+   an experiment, not automatically better. The backtest can now answer this;
+   nobody has asked it.
+2. **Alpha is still selected by Spearman** while the objective is
+   winner/podium (FIX_PLAN.md P1). The full backtest shows the blend resolving
+   as better on Spearman and top-10 while flat on winner - i.e. it is
+   succeeding at what it optimises and not at what is wanted.
+
+Housekeeping: Gate 1 prints "expect ~0.42-0.48" for the target mean where the
+true value is 0.4968. With ~20 cars exactly 10 hold `result_order <= 10` by
+construction, so ~0.50 is the ceiling; the text is stale, not the data.
 
 ## 8. Update protocol
 

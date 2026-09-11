@@ -94,8 +94,14 @@ _STATUS_MAP: Final[dict[str, str]] = {
     "disqualified": DISQUALIFIED,
     "excluded": DISQUALIFIED,
     "not classified": NOT_CLASSIFIED,
-    # --- stopped, cause not given ---
+    # --- stopped, cause neither mechanical nor an on-track incident ---
+    # "Retired" is the source's generic no-cause-given. "Illness" states a
+    # cause, but a driver-condition retirement is neither a car failure nor a
+    # collision, and inventing a third bucket for 2 rows would fragment the
+    # vocabulary. Both land here; revisit if driver-condition retirements grow.
     "retired": RETIRED_UNSPECIFIED,
+    "illness": RETIRED_UNSPECIFIED,
+    "fatigue": RETIRED_UNSPECIFIED,
     # --- incidents ---
     "accident": ACCIDENT,
     "collision": ACCIDENT,

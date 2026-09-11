@@ -13,6 +13,7 @@ api.jolpi.ca). The FastF1 cache is enabled before any API call (spec 0.4).
 """
 import argparse
 import datetime as dt
+import json
 import logging
 import re
 from pathlib import Path
@@ -93,6 +94,18 @@ def canonical_team(name) -> str:
     return slug
 
 
+# Substrings identifying a failure of the SOURCE rather than of one session.
+# Skipping past these produces a silently short dataset.
+SYSTEMATIC_ERRORS = ("calls/h", "rate limit", "429", "too many requests",
+                     "503", "502", "connection", "timed out", "timeout",
+                     "name resolution", "temporarily unavailable")
+
+
+def _is_systematic(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(marker in text for marker in SYSTEMATIC_ERRORS)
+
+
 def slugify(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", str(s).strip().lower()).strip("_")
 
@@ -148,6 +161,31 @@ def quali_frame(session_q) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # Per-race extraction (spec 1.3 / 1.4 / 1.5)
 # ---------------------------------------------------------------------------
+def _reject_hollow_results(df: pd.DataFrame, year: int, rnd: int) -> None:
+    """Reject a result frame that has rows but no actual result in them.
+
+    A transient source failure can return the right NUMBER of entries with
+    every status blank, no classification code and no points. The session
+    loads, race_rows() succeeds, and the run logs "OK ... rows=20" while
+    writing a race in which nobody scored and, under the label rules,
+    everybody retired. Two races reached the dataset this way (2021 Qatar and
+    2026 Dutch) and would have driven every reliability and points feature
+    built on top of them.
+
+    A completed Grand Prix always awards points, so zero points across the
+    whole field alongside no status text is proof the payload is empty rather
+    than unusual. Raised as an ordinary per-race error so the coverage manifest
+    records it and a later re-run picks the race up.
+    """
+    blank_status = df["status"].astype(str).str.strip().eq("").all()
+    no_points = float(df["points"].fillna(0).sum()) == 0.0
+    if blank_status and no_points:
+        raise ValueError(
+            f"hollow results for {year} round {rnd}: {len(df)} entries but no "
+            f"status text and no points awarded across the field -- the source "
+            f"returned an empty payload, not an unusual race")
+
+
 def race_rows(session, event, year: int, rnd: int) -> pd.DataFrame:
     res = session.results
     if res is None or len(res) == 0:
@@ -199,6 +237,7 @@ def race_rows(session, event, year: int, rnd: int) -> pd.DataFrame:
         ))
 
     df = pd.DataFrame(rows)
+    _reject_hollow_results(df, year, rnd)
 
     # Separate the conflated outcome concepts (FIX_PLAN section 2, P0-6):
     # result_order / officially_classified / started / finished /
@@ -219,19 +258,28 @@ def race_rows(session, event, year: int, rnd: int) -> pd.DataFrame:
 # Main ingestion loop (spec 1.1)
 # ---------------------------------------------------------------------------
 def ingest(start_year: int = START_YEAR, end_year: int | None = None,
-           with_quali: bool = True) -> pd.DataFrame:
+           with_quali: bool = True,
+           out_path: Path = RAW_PATH) -> pd.DataFrame:
     import fastf1
     fastf1.Cache.enable_cache(str(CACHE_DIR))  # spec 0.4: before any API call
 
     end_year = end_year or dt.date.today().year
     today = pd.Timestamp.now()
 
-    frames = []
+    frames: list[pd.DataFrame] = []
+    skipped: list[dict] = []
     for year in range(start_year, end_year + 1):
         try:
             schedule = fastf1.get_event_schedule(year)
         except Exception as e:
+            if _is_systematic(e):
+                raise RuntimeError(
+                    f"Could not load the {year} schedule: {e}\n"
+                    f"Systematic source failure -- aborting rather than "
+                    f"silently ingesting a partial year range.") from e
             log.warning("Could not load schedule for %s: %s", year, e)
+            skipped.append({"year": year, "round": None, "event": "SCHEDULE",
+                            "reason": str(e)})
             continue
 
         # Exclude testing (spec 1.1): round 0 and EventFormat == 'testing'
@@ -247,12 +295,26 @@ def ingest(start_year: int = START_YEAR, end_year: int | None = None,
                 if ev_date > today:
                     continue  # race hasn't happened yet
 
-            # Race session -- never let one bad session abort the run (spec 1.2)
+            # One unavailable session must not abort the run (spec 1.2), but a
+            # SYSTEMATIC failure must. A rate limit or a dead endpoint would
+            # otherwise "skip" every remaining race and still exit 0, which is
+            # how a run that fetched 8 of 17 rounds reported success
+            # (FIX_PLAN.md section 2, P1: ingestion can hide failures).
             try:
                 s = _load_session(year, rnd, "R")
                 df = race_rows(s, ev, year, rnd)
             except Exception as e:
+                if _is_systematic(e):
+                    raise RuntimeError(
+                        f"Ingestion aborted at {year} round {rnd}: {e}\n"
+                        f"This is a systematic source failure, not a missing "
+                        f"session. {len(frames)} races were ingested before it. "
+                        f"Wait for the limit to reset and re-run; cached races "
+                        f"cost no API calls, so a resume is cheap."
+                    ) from e
                 log.warning("SKIP %s round %s (R): %s", year, rnd, e)
+                skipped.append({"year": year, "round": rnd,
+                                "event": str(ev["EventName"]), "reason": str(e)})
                 continue
 
             # Qualifying session (spec 1.5) -- failure must not drop the race
@@ -275,9 +337,32 @@ def ingest(start_year: int = START_YEAR, end_year: int | None = None,
         raise RuntimeError("No races ingested. Check network access / cache.")
 
     out = pd.concat(frames, ignore_index=True).sort_values("date").reset_index(drop=True)
-    DATA_DIR.mkdir(exist_ok=True)
-    out.to_parquet(RAW_PATH, index=False)
-    log.info("Wrote %s (%s rows)", RAW_PATH, len(out))
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out.to_parquet(out_path, index=False)
+
+    # Coverage manifest (FIX_PLAN.md section 5.A.2): what was requested, what
+    # arrived, and every gap with its reason. Without this a short run is
+    # indistinguishable from a short season.
+    manifest = {
+        "requested": {"start_year": start_year, "end_year": end_year,
+                      "with_quali": with_quali},
+        "ingested": {"rows": int(len(out)),
+                     "races": int(out.groupby(["year", "round"]).ngroups),
+                     "per_season": {str(y): int(n) for y, n in
+                                    out.groupby("year")["round"].nunique().items()}},
+        "skipped": skipped,
+        "complete": not skipped,
+    }
+    manifest_path = out_path.with_suffix(".coverage.json")
+    with open(manifest_path, "w", encoding="utf-8") as fh:
+        json.dump(manifest, fh, indent=2)
+
+    log.info("Wrote %s (%s rows)", out_path, len(out))
+    log.info("Wrote %s (complete=%s, %s skipped)",
+             manifest_path, manifest["complete"], len(skipped))
+    if skipped:
+        log.warning("INCOMPLETE INGESTION: %s race(s) missing. See %s. "
+                    "Do NOT treat this as full history.", len(skipped), manifest_path)
     return out
 
 
@@ -316,8 +401,14 @@ def main():
     ap.add_argument("--end-year", type=int, default=None)
     ap.add_argument("--no-quali", action="store_true",
                     help="skip loading Q sessions (faster; quali_best_s will be NaN)")
+    ap.add_argument("--out", type=Path, default=RAW_PATH,
+                    help="output parquet. NOTE the default is hashed in "
+                         "reports/baseline.json -- point this elsewhere when "
+                         "ingesting a partial year range, which would "
+                         "otherwise REPLACE the existing seasons.")
     args = ap.parse_args()
-    df = ingest(args.start_year, args.end_year, with_quali=not args.no_quali)
+    df = ingest(args.start_year, args.end_year,
+                with_quali=not args.no_quali, out_path=args.out)
     gate1(df)
 
 

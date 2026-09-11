@@ -1059,4 +1059,147 @@ No candidate passes the gates. `python -m src.gates` exits 1.
 
 ---
 
+## [010] Recover 2018-2021, and retract the "models are worse" finding
+
+**Date:** 2026-09-11 - **Milestone:** 2 (data recovery) - **Files:**
+`src/ingest.py`, `src/labels.py`, `src/merge_raw.py` (new),
+`tests/test_merge_raw.py` (new), `data/v2/raw_results.parquet`
+**Status:** implemented
+
+### Before
+
+103 races, 2022-2026. Ingestion skipped any failing session, logged a warning
+and exited 0.
+
+### After
+
+**186 races, 3744 rows, 2018-2026**, every season complete with no missing
+rounds. All 3744 rows carry `officially_classified` from the authoritative
+`ClassifiedPosition` rather than derived from status text - the frozen dataset
+had none. Ingestion now aborts on systematic failures, rejects hollow payloads,
+and writes a coverage manifest with every gap and its reason.
+
+### Two failure modes the recovery exposed, both silent
+
+**1. Systematic failure read as a missing session.** The first run hit
+Jolpica's 500-calls/hour limit at 2020 round 9, then "skipped" rounds 9-17 and
+all of 2021 for the same reason, and exited 0. It produced 50 races and reported
+success. `_is_systematic()` now distinguishes source failures (rate limit, 429,
+503, connection, timeout) from genuinely absent sessions and aborts on the
+former. The very next run proved it: attempt 1 aborted on the still-live limit
+rather than skipping 22 races, attempt 2 succeeded.
+
+**2. A successful call returning an empty payload.** 2021 Qatar and 2026 Dutch
+entered the dataset with the correct NUMBER of rows but blank status, blank
+classification and zero points across the whole field. `race_rows()` succeeded
+and the log said `OK 2021 round 20 rows=20`. Under the label rules every driver
+in both races was marked retired with no points, which would have fed
+`driver_dnf_rate`, `team_dnf_rate`, `form_avg_points_3` and
+`constructor_standing_prior`. Re-fetching proved the data was fine at source
+(Hamilton won Qatar with 25 points), so these were stale bad cache entries.
+`_reject_hollow_results()` now rejects a field with no status text AND no points
+- deliberately requiring both, since a race can legitimately have one without
+the other.
+
+Also mapped `Illness` (2 rows), which had fallen through to `unknown`. Checked
+rather than assumed: MAG 2020 Emilia Romagna, 47 laps of a 63-lap race,
+`ClassifiedPosition` 'R'. He started and retired, so it is a retirement, not a
+non-start.
+
+### RETRACTION: entry [009]'s headline finding does not hold
+
+[009] reported, from 8 rolling folds over 47 races on 2022-2026:
+
+> blend winner accuracy **-0.0851** [-0.1702, -0.0213], interval excludes zero
+> - "the models are not merely no better than the grid, they are significantly
+> WORSE at picking winners."
+
+**That does not replicate.** On 186 races across 9 seasons:
+
+| scheme | folds | races | blend winner accuracy vs grid | resolves? |
+| --- | ---: | ---: | ---: | --- |
+| season | 6 | 127 | **+0.0079** [-0.0236, +0.0394] | no |
+| rolling | 22 | 130 | **+0.0154** [-0.0231, +0.0538] | no |
+| *(old)* rolling, 2022-2026 | *8* | *47* | *-0.0851* [-0.1702, -0.0213] | *yes* |
+
+Running the ROLLING scheme on the full data isolates the cause: it gives the
+same answer as season folds, so the earlier result was an artefact of the
+**data window**, not the fold scheme. A 47-race backtest confined to five recent
+seasons produced an interval that excluded zero and pointed the wrong way.
+
+The correct current statement is narrower and duller: **the blend is
+statistically indistinguishable from the grid baseline at picking winners.**
+
+This is the second time in this project that a confident conclusion came from
+too small a sample - the first being the 11-race season that showed an 8/11 tie.
+Both were accompanied by a written caveat about sample size that did not stop
+the conclusion being stated anyway. The lesson is to treat "the interval
+excludes zero" as necessary but not sufficient when the sample is small and the
+window is narrow.
+
+### What the full backtest actually shows (6 season folds, 127 races)
+
+| method | winner | podium | top-10 | spearman (all) | spearman (finishers) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| grid_baseline | 0.5591 | 0.6693 | 0.7701 | 0.6305 | 0.7637 |
+| top10_classifier | 0.3543 | 0.5774 | 0.7866 | 0.6624 | 0.7999 |
+| rank_model | 0.5591 | 0.6483 | 0.7764 | 0.6419 | 0.7901 |
+| blend | **0.5669** | 0.6667 | **0.7843** | **0.6622** | **0.8029** |
+
+Paired against the baseline, the blend RESOLVES as better on the guardrails -
+top-10 overlap +0.0142 [+0.0039, +0.0244] and spearman +0.0317 [+0.0200,
++0.0436] - while winner and podium do not resolve either way. The top-10
+classifier is significantly worse at winner and podium and significantly better
+at ordering, which is what a model optimised for a top-10 flag should look like.
+
+Note grid-baseline winner accuracy is 0.5591 over 127 races against 0.7273 over
+the 11 races of 2026. That single season was unusually grid-predictable, which
+is the clearest possible illustration of why it could not support a conclusion.
+
+No candidate passes the promotion gates; `python -m src.gates` exits 1. But the
+reason has changed: the volume gates now PASS (6 folds, 127 races), and the
+failures are the winner and podium thresholds themselves.
+
+### Trade-offs / what this costs
+
+- **The frozen baseline is no longer comparable.** `reports/baseline.json`
+  describes 103 races of 2022-2026; the corrected pipeline now runs on 186 races
+  of 2018-2026. Legacy-vs-corrected metric comparisons from [006] and [007] are
+  superseded and should not be quoted against these numbers.
+- **2018-2021 is a different era**: different cars, tyres, points systems and
+  a 17-race COVID season. FIX_PLAN.md section 5.A.4 warns that older data is an
+  experiment, not automatically more data. Whether including it helps is itself
+  a question the harness can now answer, and has not been asked.
+- **2026 has 13 races here against 11 in the frozen file** - two more have run
+  since. The test season is no longer the same set of races.
+- The re-ingest cost roughly an hour of wall time, mostly waiting out a rate
+  limit.
+
+### Verification
+
+- 180 tests pass (24 in `tests/test_merge_raw.py`, covering overlap refusal,
+  coverage holes, systematic-vs-session failure classification, and the hollow
+  payload guard in both directions).
+- Coverage manifests report `complete: true` with zero skips for all three
+  ranges.
+- Merge refuses overlapping races: the first and second runs both contained
+  2020 rounds 1-8, and `merge_raw` named all eight rather than silently
+  doubling them in every historical aggregate.
+- Gate 1 spot-check on 2021 Abu Dhabi matches the real result exactly
+  (VER, HAM, SAI, TSU, GAS, BOT, NOR, ALO, OCO, LEC).
+- Gate 2 passes on the rebuilt features: 44 debuts and 1163 first-circuit visits
+  all NaN pre-fill.
+- Zero unknown statuses, zero zero-point races.
+
+### Not done
+
+- Gate 1 still prints "expect ~0.42-0.48" for the target mean where the true
+  value is 0.4968. With ~20 cars exactly 10 hold `result_order <= 10` by
+  construction, so ~0.50 is the ceiling; the heuristic predates the label
+  rework and is stale.
+- Whether 2018-2021 helps or hurts has not been measured.
+- `reports/baseline.json` has not been re-frozen against the new dataset.
+
+---
+
 <!-- Append new entries above this line, newest last. -->
