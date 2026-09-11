@@ -66,9 +66,10 @@ GRID_DEFAULT = 20.0
 # FIX_PLAN.md section 5.A.7 prefers ("native missing-value handling where
 # suitable"). These are excluded from the no-NaN assertion.
 from .qualifying import NATIVE_MISSING as _QUALI_MISSING  # noqa: E402
+from .practice import NATIVE_MISSING as _PRACTICE_MISSING  # noqa: E402
 from .ratings import NATIVE_MISSING as _PACE_MISSING  # noqa: E402
 
-NATIVE_MISSING = _QUALI_MISSING + _PACE_MISSING
+NATIVE_MISSING = _QUALI_MISSING + _PACE_MISSING + _PRACTICE_MISSING
 
 
 @dataclass

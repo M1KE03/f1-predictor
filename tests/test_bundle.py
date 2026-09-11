@@ -109,12 +109,26 @@ def test_a_directory_without_a_manifest_is_refused(tmp_path):
 # --- the real champion ------------------------------------------------------
 
 def test_the_built_champion_loads_and_verifies():
+    """A stale champion SKIPS rather than fails: during development the feature
+    set moves ahead of the last build, and the bundle correctly refusing to load
+    is the designed behaviour (asserted directly above). Rebuild with
+    `python -m src.build_bundle` to make this run."""
+    import json as _json
     import pathlib
+
     from src.columns import FEATURE_COLS
 
     path = pathlib.Path("models/champion")
-    if not (path / "manifest.json").exists():
+    manifest_path = path / "manifest.json"
+    if not manifest_path.exists():
         pytest.skip("champion bundle not built")
+
+    stored = _json.loads(manifest_path.read_text())["feature_cols"]
+    if list(stored) != list(FEATURE_COLS):
+        pytest.skip(f"champion is stale: built on {len(stored)} features, code "
+                    f"now defines {len(FEATURE_COLS)}. Rebuild with "
+                    f"`python -m src.build_bundle`.")
+
     bundle = ModelBundle.load(path, FEATURE_COLS)
     assert bundle.manifest.n_train_races > 0
     assert len(bundle.manifest.feature_cols) == len(FEATURE_COLS)

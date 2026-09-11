@@ -7,7 +7,7 @@ Claude session and it should be able to continue without re-reading everything.
 any milestone lands. Keep it current, not comprehensive — detail lives in
 `REASONING.md` and `FIX_PLAN.md`.
 
-**Last updated:** 2026-09-11 — session 1 (milestones 0-5 done; champion bundle built, forecasts archiving)
+**Last updated:** 2026-09-11 — session 1 (milestones 0-6 done; all offline levers measured and exhausted)
 
 ---
 
@@ -131,7 +131,7 @@ fitted imputation state, or serving parity.
 | 3 | Qualifying & car features: `qualifying.py`, `ratings.py` | **DONE**. 3.1 quali pace: no gain. 3.2 race pace + alpha fix: best result so far |
 | 4 | Model comparison M0-M4 (+ Plackett-Luce, winner/podium heads) | **4.1 DONE, PASSES** (probabilities); **4.2 DONE, negative** (heads) |
 | 5 | Validated forecast output with model bundle + probabilities | **DONE** - `models/champion`, `reports/forecasts/` |
-| 6 | Optional: practice pace, forecast archive, TabPFN, custom NN | NOT STARTED |
+| 6 | Optional: practice pace, forecast archive, TabPFN, custom NN | **practice pace DONE, NEGATIVE** (removed); TabPFN/NN not attempted, and FIX_PLAN says 127 race groups cannot support them |
 
 Milestones 1 and 2 go together — correctness first, then the harness to measure
 it. No feature or model work before both land.
@@ -316,6 +316,7 @@ evidence FIX_PLAN.md section 8.6 requires and nothing else provides.
 | 5 | model bundle + calibrated forecast + archive | shipped; also fixed an early-stopping bug worth +0.008 winner accuracy |
 | 5b | forecast scoring (`src/score_forecasts.py`) | closes the prospective loop; nothing to score until 2026 R14 runs |
 | 5c | in-fold hyperparameter tuning (`--tune`) | **NO EFFECT.** winner +0.0000; chosen leaves vary 7/31/7/31/15/7 across folds = selecting noise |
+| 6 | practice long-run pace (5 features, 184 races ingested) | **SIGNIFICANTLY WORSE.** winner -0.0787 [-0.1417, -0.0157], resolves. REMOVED from FEATURE_COLS, data retained |
 
 Reproduce:
 
@@ -326,47 +327,51 @@ python -m src.gates    --backtest-dir reports/backtest_heads
 
 ### Next action
 
-**The offline levers are exhausted.** Three have been tried and measured with
-no gain -- current-weekend qualifying features [011], specialist winner/podium
-objectives [012], hyperparameter tuning [014]. Two produced gains: race pace
-plus fixing the blend objective [011b], and the early-stopping fix [013], which
-was worth more than every feature added in milestone 3.
+**Every offline lever in FIX_PLAN.md has now been tried and measured.** Two
+worked; four did not:
 
-The consistent pattern: on 127 races, anything selected on a ~22-race
-validation block fits noise. Only new information or a removed defect survives.
+| worked | failed |
+| --- | --- |
+| race pace + recency ratings (+0.039 winner) | qualifying pace (redundant with grid) |
+| fixing the early-stopping bug (+0.008) | specialist winner/podium heads (negative) |
+| | hyperparameter tuning (no effect) |
+| | practice long-run pace (significantly WORSE) |
 
-So the remaining work is evidence, and one untried information source.
+The pattern is consistent and is the single most useful thing this project has
+learned: **on 127 races, anything selected on a ~22-race validation block fits
+noise. Only genuinely new information or a removed defect survives.**
 
-1. **Archive a forecast for every remaining 2026 race** (~9 left). Run AFTER
-   qualifying, BEFORE the race:
+That makes the remaining work almost entirely about evidence, not modelling.
+
+1. **Archive a forecast for every remaining 2026 race** (~9 left). After
+   qualifying, before the race:
 
    ```
    python -m src.predict --year 2026 --round N --from-quali --archive
-   python -m src.score_forecasts        # after results are ingested
+   python -m src.score_forecasts          # once results are ingested
    ```
 
    This is the only evidence that accumulates without further modelling, and
    the only kind FIX_PLAN.md section 8.6 accepts as prospective validation.
 
-2. **Practice pace** (FIX_PLAN.md section 5.D): long-run stints, tyre-age
-   slope, stint consistency, excluding in/out and deleted laps. The last
-   untried source of genuinely NEW information, as opposed to a re-expression
-   of what grid position already encodes. ~560 session loads; mind the
-   500 calls/hour limit.
+2. **Re-run the offline experiments when the sample is larger.** The negative
+   results above are conditional on 127 races, not permanent. `--tune` and the
+   specialist heads are still in the codebase specifically so they can be
+   re-measured rather than re-argued.
 
-3. Optional, low expected value on this sample: TabPFN (section 7), dynamic
-   ratings, a custom neural model. FIX_PLAN.md is explicit that 127 race groups
-   cannot support these, and three negative results here support that.
+3. **Not recommended on this data:** TabPFN, dynamic ratings, a custom neural
+   model (FIX_PLAN.md section 7). It says 127 race groups cannot support them,
+   and four negative results here are consistent with that.
 
 Known gaps, none blocking:
 
 - `models/champion` keeps no previous champion for rollback (section 11).
 - Displayed order and probabilities can disagree row for row; stated in the
-  output, but worth unifying.
-- Unexplained `p_top10` shift between two historical backtest runs; the
-  pipeline is verified deterministic and the classifier is not the champion.
-  See REASONING [013].
+  output, worth unifying.
+- Unexplained `p_top10` shift between two historical backtest runs; pipeline
+  verified deterministic, classifier is not the champion. See REASONING [013].
 - Sprint weekends; the `sakhir` circuit_id collision (20 rows).
+- `data/v2/practice.parquet` is retained but unread by default.
 
 ## 8. Update protocol
 

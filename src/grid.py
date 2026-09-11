@@ -31,10 +31,17 @@ CONFIRMED: Final = "confirmed"
 # Derived from qualifying order. Penalties known after the session are NOT
 # reflected, so the order may be wrong even though every position is filled.
 PROVISIONAL: Final = "provisional"
+# Qualifying has NOT run. The order is guessed from each driver's average of
+# prior starting grids. Measured cost against a real grid, over 61 races of
+# 2024-2026: winner accuracy 0.5902 -> 0.2787, podium 0.6831 -> 0.4809, and the
+# assumed grid is 3.45 places off the real one on average -- all three
+# differences resolve. This is a materially weaker forecast and must not be
+# pooled with post-qualifying ones.
+ASSUMED: Final = "assumed"
 # No usable grid. A validated forecast must be declined.
 UNAVAILABLE: Final = "unavailable"
 
-GRID_STATUSES: Final = (CONFIRMED, PROVISIONAL, UNAVAILABLE)
+GRID_STATUSES: Final = (CONFIRMED, PROVISIONAL, ASSUMED, UNAVAILABLE)
 
 ENTRY_COLS: Final = ("driver", "qualifying_position", "grid_position", "pit_start")
 
@@ -70,6 +77,15 @@ class GridSnapshot:
 
     @property
     def is_usable(self) -> bool:
+        return self.status in (CONFIRMED, PROVISIONAL, ASSUMED)
+
+    @property
+    def is_post_qualifying(self) -> bool:
+        """Whether a real qualifying session stands behind this grid.
+
+        The single most important quality distinction in a forecast: ordering
+        by an assumed grid roughly halves winner accuracy (see ASSUMED).
+        """
         return self.status in (CONFIRMED, PROVISIONAL)
 
     def validate(self, roster: Iterable[str] | None = None) -> "GridSnapshot":

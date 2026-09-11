@@ -21,6 +21,7 @@ import pandas as pd
 from .circuit import add_circuit_history
 from .leakage import (past_expanding_mean, past_mean_excluding_current_race,
                       past_rolling_mean, sort_frame)
+from .practice import add_practice_pace
 from .preprocessing import FillPolicy
 from .qualifying import add_qualifying_pace
 from .ratings import add_pace_ratings
@@ -72,7 +73,8 @@ def add_reliability(df: pd.DataFrame) -> pd.DataFrame:
         on=["year", "round", "team"], how="left")
 
 
-def compute_features(df: pd.DataFrame) -> pd.DataFrame:
+def compute_features(df: pd.DataFrame,
+                     practice: pd.DataFrame | None = None) -> pd.DataFrame:
     """Every historical feature, no imputation. Shared by both paths.
 
     Order is load-bearing: teammate deltas are built from the recent-form
@@ -88,12 +90,15 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
     # Current-weekend pace. Purely within-race, so it neither reads nor
     # affects any historical aggregate above it.
     df = add_qualifying_pace(df)
+    # Current-weekend practice long runs, merged per (race, driver).
+    df = add_practice_pace(df, practice)
     return df
 
 
 def build_asof_features(history: pd.DataFrame,
                         upcoming: pd.DataFrame | None = None,
-                        policy: FillPolicy | None = None) -> pd.DataFrame:
+                        policy: FillPolicy | None = None,
+                        practice: pd.DataFrame | None = None) -> pd.DataFrame:
     """Features for `history` (+ optional not-yet-run `upcoming` rows).
 
     Args:
@@ -116,7 +121,7 @@ def build_asof_features(history: pd.DataFrame,
     else:
         combined = history.copy()
 
-    combined = compute_features(combined)
+    combined = compute_features(combined, practice)
     if policy is not None:
         combined = policy.transform(combined)
     return combined

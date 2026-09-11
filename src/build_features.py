@@ -46,12 +46,25 @@ FILLS_NAME = "fill_values.json"
 EXTRA_COLS: tuple[str, ...] = ()
 
 
-def build(raw_path: Path = RAW_PATH, out_dir: Path = DATA_DIR) -> pd.DataFrame:
+def build(raw_path: Path = RAW_PATH, out_dir: Path = DATA_DIR,
+          practice_path: Path | None = None) -> pd.DataFrame:
     raw = pd.read_parquet(raw_path)
     raw["date"] = pd.to_datetime(raw["date"])
 
+    # Practice pace is optional: it is expensive to ingest and the pipeline
+    # must work without it, leaving those features NaN (they are declared
+    # native-missing, so that reaches the model as information).
+    practice_path = practice_path or (raw_path.parent / "practice.parquet")
+    practice = pd.read_parquet(practice_path) if practice_path.exists() else None
+    if practice is not None:
+        log.info("Practice pace: %s rows over %s races", len(practice),
+                 practice.groupby(["year", "round"]).ngroups)
+    else:
+        log.warning("No practice pace at %s -- those features will be NaN",
+                    practice_path)
+
     # Pass no policy: this is the pre-imputation frame.
-    df = build_asof_features(raw)
+    df = build_asof_features(raw, practice=practice)
 
     keep = [c for c in ID_COLS if c in df.columns] + FEATURE_COLS + [TARGET]
     extra = [c for c in EXTRA_COLS if c in df.columns]
@@ -88,6 +101,8 @@ def main():
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--raw", type=Path, default=RAW_PATH)
+    parser.add_argument("--practice", type=Path, default=None,
+                        help="practice pace parquet (default: alongside --raw)")
     parser.add_argument("--out-dir", type=Path, default=DATA_DIR,
                         help="where features/prefill/fill_values go. Point this at "
                              "a new directory to avoid overwriting artifacts hashed "
@@ -95,7 +110,7 @@ def main():
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-    df = build(args.raw, args.out_dir)
+    df = build(args.raw, args.out_dir, args.practice)
     print(f"\n{FEATURES_NAME}: {len(df)} rows x {len(FEATURE_COLS)} features; "
           f"target mean = {df[TARGET].mean():.4f}")
     print("Next: python -m src.audit_leakage   (VALIDATION GATE 2 -- mandatory)")

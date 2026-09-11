@@ -142,9 +142,14 @@ def predict(year: int, rnd: int,
                    .set_index("driver")["form_avg_quali_3"].to_dict())
         grid_snapshot = grid_module.from_qualifying(
             entry_list, assumed, source="assumed-from-recent-form")
-        grid_snapshot.notes.append(
-            "No qualifying result and no supplied grid: order assumed from "
-            "form_avg_quali_3 (average of PRIOR starting grids).")
+        grid_snapshot.status = grid_module.ASSUMED
+        grid_snapshot.notes = [
+            "Qualifying has NOT run. Order assumed from form_avg_quali_3 "
+            "(average of PRIOR starting grids).",
+            "MEASURED COST over 61 races: winner accuracy 0.5902 -> 0.2787, "
+            "podium overlap 0.6831 -> 0.4809 against a real grid. Re-run with "
+            "--from-quali after qualifying for a materially better forecast.",
+        ]
     grid_snapshot.validate(entry_list)
 
     positions = grid_snapshot.entries.set_index("driver")
@@ -321,13 +326,18 @@ def main():
         print(f"Cutoff (UTC): {record['cutoff_utc']}")
     for note in record["notes"]:
         print(f"  ! {note}")
-    if record["status"] != grid_module.CONFIRMED:
+    if record["status"] == grid_module.ASSUMED:
+        print("  ! PRE-QUALIFYING forecast. Roughly half the winner accuracy of "
+              "a post-qualifying one.")
+    elif record["status"] != grid_module.CONFIRMED:
         print("  ! This forecast is NOT made against a confirmed starting grid.")
 
-    print("\nNOTE: pred_finish_rank/predicted_podium come from a grid-position + "
-          "learning-to-rank blend (src.blend_rank, alpha tuned on the validation "
-          "season); p_top10 is the separate top-10 classifier's probability, "
-          "shown for reference only -- it is not what the order is sorted by.")
+    print("\nNOTE: pred_finish_rank is UTILITY order -- a grid-position and "
+          "learning-to-rank blend at the bundle's alpha. p_win / p_podium / "
+          "p_top10 come from a Plackett-Luce distribution over the ranker's "
+          "scores alone, so the two need not agree row for row (FIX_PLAN "
+          "section 11 permits this but requires it to be stated). Where they "
+          "disagree, the probabilities are the calibrated quantity.")
     print("NOTE: no weather input is used. Race-session weather was removed as "
           "unavailable before lights-out (see README).\n")
     bundle_info = out.attrs["bundle"]

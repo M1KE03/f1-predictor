@@ -1680,4 +1680,117 @@ remove a defect survive.
 
 ---
 
+## [015] Practice long-run pace: measured, and REMOVED
+
+**Date:** 2026-09-11 - **Milestone:** 6 (FIX_PLAN.md section 5.D) - **Files:**
+`src/practice.py` (new), `src/ingest_practice.py` (new), `src/columns.py`,
+`src/features.py`, `src/build_features.py`, `src/preprocessing.py`,
+`tests/test_practice.py` (new)
+**Status:** implemented, measured, features REMOVED from the model
+
+### Why this was worth trying
+
+It was the last untried source of genuinely NEW information. Everything else
+either describes history or re-expresses qualifying order: `grid_position` IS
+the qualifying result, and increment 3.1 established that qualifying pace adds
+nothing beyond it. Practice long runs are the closest observable proxy for race
+pace available BEFORE the race.
+
+184 of 186 races ingested (3416 driver-races, 91%), sessions FP2 where
+available and FP1/FP3 otherwise. The two exclusions are a good sanity check:
+2020 round 11 is the Eifel GP, where FP1 and FP2 were cancelled because fog
+grounded the medical helicopter. Correctly excluded rather than zero-filled.
+
+### The correlations looked promising
+
+    corr(practice_pace_pct, result_order)  = 0.215   weak
+    corr(practice_pace_pct, grid_position) = 0.252   but INDEPENDENT
+    corr(grid_position,     result_order)  = 0.618
+
+This is the OPPOSITE shape to increment 3.1. Qualifying pace was a strong
+predictor (0.495) but 0.658-redundant with grid. Practice pace is weak but
+largely orthogonal -- exactly the case where a weak feature can still add
+value, because it is not saying something the model already knows.
+
+### It made things significantly worse
+
+Paired on the same 127 races, 43-feature model minus 38-feature:
+
+| metric | difference |
+| --- | --- |
+| winner accuracy | **-0.0787 [-0.1417, -0.0157]** RESOLVES |
+| podium overlap | -0.0105 [-0.0315, +0.0105] |
+| top-10 overlap | +0.0016 [-0.0079, +0.0110] |
+| spearman | +0.0063 [-0.0028, +0.0152] |
+| winner log loss | 1.1469 -> 1.1861 |
+
+Ranker winner accuracy 0.6063 -> 0.5276. This is the first change in the
+project that made a headline metric significantly WORSE with the interval
+excluding zero.
+
+**Removed from FEATURE_COLS.** FIX_PLAN.md section 5.D required exactly this
+test -- "keep them only if they improve chronological validation" -- and they
+failed it. Re-running the backtest after removal reproduces 0.6063 exactly, so
+nothing else moved.
+
+### Why it hurt, and why that is not surprising
+
+Fuel loads and run plans are not observable. A team doing a heavy-fuel race
+simulation and one doing a low-fuel run produce very different lap times from
+identical cars, and nothing in the data distinguishes them. Taking the BEST
+long run rather than the average reduces the contamination but cannot remove
+it, which is what the 0.215 correlation reflects.
+
+Weak AND independent is still weak. Five noisy columns on ~3000 training rows
+displace better signal: the model spends splits on them and generalises worse.
+That is the same arithmetic as increment 1.4, where REMOVING eight leaky
+weather features improved test AUC.
+
+### Trade-offs / what this costs
+
+- **The data and code are retained**, and the practice columns stay in
+  `ID_COLS` so `features.parquet` carries them for auditing. The measurement is
+  sound; it is the modelling use that failed. They may become usable with
+  stint-level fuel correction, or with many more seasons.
+- **A comment in `columns.py` records the numbers and forbids silent re-adding**
+  without re-running the backtest. Without that, the next person sees an
+  obviously-relevant unused column and repeats this.
+- Ingestion cost roughly 70 minutes over four attempts against the rate limit,
+  for a negative result. That is the correct price for knowing.
+- `practice.parquet` is now a 3416-row artifact nothing reads by default.
+
+### Verification
+
+- 267 tests (13 new in `tests/test_practice.py`), 1 skipped.
+- Safety-car, pit, inaccurate and deleted laps asserted excluded.
+- A three-lap stint asserted NOT to count as a long run; the best long run
+  asserted used rather than the average, with a heavy-fuel stint present.
+- Degradation slope asserted positive for a stint that slows and ~0 for a flat
+  one.
+- A driver absent from practice asserted NOT to receive another driver's pace.
+- Gate 2 passes; zero unexpected NaNs.
+- Removal verified by re-running the backtest: ranker winner accuracy returns
+  to exactly 0.6063.
+
+### The pattern across milestone 3 to 6
+
+Six changes measured on the same harness:
+
+| change | result |
+| --- | --- |
+| qualifying pace features | no gain -- strong but redundant with grid |
+| race pace + recency ratings | **+0.039 winner** -- new information |
+| blend alpha on the real objective | recovered that gain into the blend |
+| specialist winner/podium heads | negative -- weight selection overfits ~22 races |
+| hyperparameter tuning | no effect -- picks a different model size every fold |
+| **early-stopping misconfiguration** | **+0.008 winner** -- a BUG, worth more than most features |
+| practice long-run pace | **significantly worse** -- weak, noisy, displaces signal |
+
+Two things worked: adding genuinely new information, and removing a defect.
+Everything selected on a ~22-race validation block fit noise. That is the
+lesson to carry forward, and it is an argument for collecting prospective
+evidence rather than running more offline experiments.
+
+---
+
 <!-- Append new entries above this line, newest last. -->

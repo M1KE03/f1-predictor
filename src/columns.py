@@ -99,5 +99,28 @@ ID_COLS += ["q1_s", "q2_s", "q3_s", "quali_best_s", "gap_to_pole_s"]
 # here and only ever reaches the model through src/ratings.py history.
 ID_COLS += ["race_pace_pct", "race_pace_laps", "race_pace_sd_pct"]
 
+# ---------------------------------------------------------------------------
+# Practice long-run pace: INGESTED AND MEASURED, but NOT a model input.
+#
+# FIX_PLAN.md section 5.D required these to be kept "only if they improve
+# chronological validation". They did not -- they made things significantly
+# worse. On the same 127 backtested races, adding them moved ranker winner
+# accuracy 0.6063 -> 0.5276, a paired -0.0787 [-0.1417, -0.0157] whose interval
+# EXCLUDES ZERO, and winner log loss 1.1469 -> 1.1861.
+#
+# The diagnosis is in the correlations: practice pace correlates only 0.215
+# with finishing order (against 0.618 for grid position) because fuel loads and
+# run plans are not observable, so a heavy-fuel race simulation and a low-fuel
+# run are indistinguishable. It IS largely independent of grid (0.252), which
+# is why it was worth trying -- but weak and independent is still weak, and
+# five noisy columns on ~3000 training rows displace better signal.
+#
+# The data and src/practice.py are retained: the measurement is sound, and the
+# features may become usable with stint-level fuel correction or many more
+# seasons. Do not re-add them to FEATURE_COLS without re-running the backtest.
+# ---------------------------------------------------------------------------
+ID_COLS += ["practice_pace_pct", "practice_laps", "practice_sd_pct",
+            "practice_deg_slope", "practice_runs"]
+
 assert not (set(FEATURE_COLS) & set(WEATHER_REMOVED)), \
     "Race-session weather must not re-enter FEATURE_COLS without a proven forecast source."
