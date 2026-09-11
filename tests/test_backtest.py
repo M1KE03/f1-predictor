@@ -225,8 +225,79 @@ def test_too_few_races_fails_even_with_a_large_gain():
     assert "at least 60 races" in [g.name for g in result if not g.passed]
 
 
-def test_probability_gates_are_declared_unavailable_not_silently_skipped():
-    per_race = {"grid_baseline": _rows(0.60, 0.60), "blend": _rows(0.70, 0.70)}
-    report = gates.summary(per_race, n_folds=3)
-    assert report["unavailable_gates"]
-    assert any("log loss" in note for note in report["unavailable_gates"])
+def test_probability_gates_report_unavailable_rather_than_silently_skipping():
+    """Predictions without calibrated probabilities must say so, not quietly
+    score four checks fewer and call the result complete."""
+    bare = pd.DataFrame({"year": 2026, "round": [1] * 4,
+                         "driver": list("ABCD"), "is_winner": [1, 0, 0, 0],
+                         "is_podium": [1, 1, 1, 0]})
+    report = gates.probability_gates(bare)
+    assert not report["available"]
+    assert "probabilities" in report["reason"]
+
+
+def test_probability_gates_score_when_probabilities_are_present():
+    from src import probabilities as prob
+
+    scores = [3.0, 2.0, 1.0, 0.0]
+    frame = pd.DataFrame({"year": 2026, "round": [1] * 4, "driver": list("ABCD"),
+                          "rank_score": scores, "grid_position": [1.0, 2.0, 3.0, 4.0],
+                          "is_winner": [1, 0, 0, 0], "is_podium": [1, 1, 1, 0]})
+    frame = prob.add_probabilities(frame, "rank_score", 1.0, n_draws=2000)
+    grid = prob.add_probabilities(
+        frame.assign(_u=-frame["grid_position"]), "_u", 1.0, n_draws=2000)
+    for column in ("p_win", "p_podium", "p_top10"):
+        frame[f"{column}_grid"] = grid[column].to_numpy()
+
+    report = gates.probability_gates(frame)
+    assert report["available"]
+    assert {c["name"] for c in report["checks"]} >= {
+        "winner log loss beats grid", "probabilities are coherent"}
+
+
+# --- per-fold alpha selection -----------------------------------------------
+# alpha was previously a constant passed in from outside every fold (a small
+# leak) and selected by Spearman while winner/podium is the objective. The
+# sweep showed that is not theoretical: Spearman peaks near alpha 0.5 while
+# winner accuracy peaks at alpha 0.
+
+def _val_frame(ranker_is_right: bool) -> pd.DataFrame:
+    """A validation block where the ranker either nails the winner or does not."""
+    rows = []
+    for rnd in range(1, 11):
+        for i, d in enumerate(["AAA", "BBB", "CCC", "DDD"]):
+            # Grid order always puts AAA on pole; the winner is always DDD.
+            rows.append(dict(
+                year=2024, round=rnd, driver=d, grid_position=float(i + 1),
+                position=1.0 if d == "DDD" else float(i + 2),
+                status="Finished",
+                rank_score=(10.0 if d == "DDD" else float(4 - i))
+                if ranker_is_right else float(4 - i)))
+    return pd.DataFrame(rows)
+
+
+def test_alpha_favours_the_ranker_when_the_ranker_is_right():
+    alpha = backtest.select_alpha(_val_frame(ranker_is_right=True))
+    assert alpha < 0.5, f"expected weight on the ranker, got alpha={alpha}"
+
+
+def test_alpha_favours_the_grid_when_the_ranker_is_wrong():
+    alpha = backtest.select_alpha(_val_frame(ranker_is_right=False))
+    assert alpha > 0.5, f"expected weight on the grid, got alpha={alpha}"
+
+
+def test_alpha_is_a_valid_weight():
+    for right in (True, False):
+        alpha = backtest.select_alpha(_val_frame(right))
+        assert 0.0 <= alpha <= 1.0
+
+
+def test_alpha_selection_is_deterministic():
+    frame = _val_frame(ranker_is_right=True)
+    assert backtest.select_alpha(frame) == backtest.select_alpha(frame)
+
+
+def test_alpha_objective_is_winner_first():
+    """Documents the decision: winner accuracy leads, podium breaks ties."""
+    assert backtest.ALPHA_OBJECTIVE[0] == "winner_accuracy"
+    assert "spearman_all" not in backtest.ALPHA_OBJECTIVE

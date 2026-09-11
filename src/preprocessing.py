@@ -50,7 +50,7 @@ RATE_FEATURES = {
 ZERO_FILL = [
     "form_avg_points_3", "momentum", "driver_wet_delta", "quali_gap_to_teammate",
     "form_finish_vs_teammate", "driver_wet_n", "driver_races_at_circuit",
-    "constructor_standing_prior",
+    "constructor_standing_prior", "driver_pace_races",
 ]
 FLAG_DEFAULTS = {"is_rookie_here": 1.0, "teammate_available": 0.0, "pit_start": 0.0}
 # Retained for auditing only -- no longer model inputs (increment 1.4).
@@ -65,7 +65,10 @@ GRID_DEFAULT = 20.0
 # the fact the model should learn. LightGBM splits on NaN natively, which
 # FIX_PLAN.md section 5.A.7 prefers ("native missing-value handling where
 # suitable"). These are excluded from the no-NaN assertion.
-from .qualifying import NATIVE_MISSING  # noqa: E402
+from .qualifying import NATIVE_MISSING as _QUALI_MISSING  # noqa: E402
+from .ratings import NATIVE_MISSING as _PACE_MISSING  # noqa: E402
+
+NATIVE_MISSING = _QUALI_MISSING + _PACE_MISSING
 
 
 @dataclass

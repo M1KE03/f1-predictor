@@ -37,6 +37,8 @@ import pandas as pd
 
 from .blend_rank import add_blended_score
 from .metrics import HEADLINE_COLS, race_metric_rows
+from .probabilities import (coherence_report, podium_brier,
+                            uniform_winner_log_loss, winner_log_loss)
 
 log = logging.getLogger("gates")
 
@@ -54,6 +56,8 @@ MIN_WINNER_GAIN = 0.05        # +5 percentage points
 MIN_PODIUM_GAIN = 0.03
 MAX_TOP10_LOSS = 0.02
 MAX_SPEARMAN_LOSS = 0.02
+# Winner log loss must IMPROVE; podium Brier may worsen by at most this.
+MAX_PODIUM_BRIER_LOSS = 0.01
 MIN_FOLDS = 3
 MIN_RACES = 60
 
@@ -151,11 +155,95 @@ def evaluate_gates(candidate: pd.DataFrame, baseline: pd.DataFrame,
     return results
 
 
+def probability_rows(df: pd.DataFrame, win_col: str,
+                     podium_col: str) -> pd.DataFrame:
+    """Per-race winner log loss and podium Brier, for paired comparison."""
+    rows = []
+    for (year, rnd), race in df.groupby(["year", "round"], sort=False):
+        winner = race[race["is_winner"] == 1]
+        if not len(winner):
+            continue
+        p = float(winner[win_col].iloc[0])
+        rows.append({
+            "year": year, "round": rnd,
+            "winner_log_loss": -np.log(max(p, 1e-15)),
+            "podium_brier": float(((race[podium_col] - race["is_podium"]) ** 2).mean()),
+        })
+    return pd.DataFrame(rows).set_index(["year", "round"])
+
+
+def probability_gates(predictions: pd.DataFrame) -> dict[str, Any]:
+    """Score the two gates that needed calibrated race-level probabilities.
+
+    Compared against a PROBABILISTIC grid baseline -- a one-parameter
+    grid-utility distribution with its own fitted temperature -- because a
+    deterministic order has no win probabilities to be better than
+    (FIX_PLAN.md section 8).
+    """
+    needed = {"p_win", "p_podium", "p_win_grid", "p_podium_grid"}
+    if not needed <= set(predictions.columns):
+        return {"available": False,
+                "reason": "predictions carry no calibrated probabilities; "
+                          "re-run src.backtest to produce them"}
+
+    model = probability_rows(predictions, "p_win", "p_podium")
+    grid = probability_rows(predictions, "p_win_grid", "p_podium_grid")
+
+    log_loss = paired_difference(model["winner_log_loss"], grid["winner_log_loss"])
+    brier = paired_difference(model["podium_brier"], grid["podium_brier"])
+
+    coherence = coherence_report(predictions)
+    favourite = predictions.loc[
+        predictions.groupby(["year", "round"])["p_win"].idxmax()]
+
+    checks = [
+        GateResult("winner log loss beats grid",
+                   bool(log_loss["mean_difference"] is not None
+                        and log_loss["mean_difference"] < 0),
+                   f"{log_loss['mean_difference']:+.4f} "
+                   f"[{log_loss['ci_low']:+.4f}, {log_loss['ci_high']:+.4f}] "
+                   f"(negative is better)"),
+        GateResult("podium Brier worsens <= 0.01",
+                   bool(brier["mean_difference"] is not None
+                        and brier["mean_difference"] <= MAX_PODIUM_BRIER_LOSS),
+                   f"{brier['mean_difference']:+.4f} "
+                   f"[{brier['ci_low']:+.4f}, {brier['ci_high']:+.4f}]"),
+        GateResult("probabilities are coherent", bool(coherence["coherent"]),
+                   f"{coherence['n_problems']} problems over "
+                   f"{coherence['n_races']} races"),
+        GateResult("beats the uniform floor",
+                   bool(winner_log_loss(predictions)
+                        < uniform_winner_log_loss(predictions)),
+                   f"{winner_log_loss(predictions):.4f} vs "
+                   f"{uniform_winner_log_loss(predictions):.4f}"),
+    ]
+    return {
+        "available": True,
+        "winner_log_loss": {"model": winner_log_loss(predictions),
+                            "grid": winner_log_loss(
+                                predictions.drop(columns=["p_win"])
+                                .rename(columns={"p_win_grid": "p_win"})),
+                            "uniform": uniform_winner_log_loss(predictions)},
+        "podium_brier": {"model": podium_brier(predictions),
+                         "grid": podium_brier(
+                             predictions.drop(columns=["p_podium"])
+                             .rename(columns={"p_podium_grid": "p_podium"}))},
+        "calibration": {"mean_favourite_p_win": float(favourite["p_win"].mean()),
+                        "favourite_actually_won": float(favourite["is_winner"].mean())},
+        "paired_vs_grid": {"winner_log_loss": log_loss, "podium_brier": brier},
+        "passed": all(c.passed for c in checks),
+        "checks": [{"name": c.name, "passed": c.passed, "detail": c.detail}
+                   for c in checks],
+    }
+
+
 def score_predictions(predictions: pd.DataFrame,
                       alpha: float = 0.5) -> dict[str, pd.DataFrame]:
     """Per-race metric rows for every ordering method."""
     data = predictions.copy()
-    data["blend_score"] = add_blended_score(data, "rank_score", alpha)
+    if "blend_score" not in data.columns:
+        # Older exports have no per-fold alpha; fall back to the CLI value.
+        data["blend_score"] = add_blended_score(data, "rank_score", alpha)
     return {name: race_metric_rows(data, col, ascending).set_index(["year", "round"])
             for name, (col, ascending) in ORDERINGS.items()}
 
@@ -175,10 +263,7 @@ def summary(per_race: dict[str, pd.DataFrame], n_folds: int) -> dict[str, Any]:
             name: {m: paired_difference(rows[m], baseline[m]) for m in HEADLINE_COLS}
             for name, rows in per_race.items() if name != baseline_name},
         "gates": {},
-        "unavailable_gates": [
-            "winner log loss and podium Brier need calibrated race-level win "
-            "probabilities (milestone 4); not scored here.",
-        ],
+        "probability": {},
     }
     for name, rows in per_race.items():
         if name == baseline_name:
@@ -211,6 +296,7 @@ def main() -> None:
 
     per_race = score_predictions(predictions, alpha=args.alpha)
     report = summary(per_race, n_folds)
+    report["probability"] = probability_gates(predictions)
 
     out = args.out or (args.backtest_dir / "gates.json")
     with out.open("w", encoding="utf-8") as fh:
@@ -231,8 +317,23 @@ def main() -> None:
                   f"{check['name']:<38} {check['detail']}")
         print(f"  => {'PROMOTE' if gate['passed'] else 'DO NOT PROMOTE'}")
 
-    for note in report["unavailable_gates"]:
-        print(f"\nNOT SCORED: {note}")
+    probability = report.get("probability", {})
+    if probability.get("available"):
+        print("\n--- probability quality (ranker vs probabilistic grid baseline) ---")
+        wll, brier = probability["winner_log_loss"], probability["podium_brier"]
+        print(f"  winner log loss : model {wll['model']:.4f} | "
+              f"grid {wll['grid']:.4f} | uniform floor {wll['uniform']:.4f}")
+        print(f"  podium Brier    : model {brier['model']:.4f} | "
+              f"grid {brier['grid']:.4f}")
+        cal = probability["calibration"]
+        print(f"  calibration     : favourite's mean p_win "
+              f"{cal['mean_favourite_p_win']:.3f}, actually won "
+              f"{cal['favourite_actually_won']:.3f}")
+        for check in probability["checks"]:
+            print(f"  {'PASS' if check['passed'] else 'FAIL'}  "
+                  f"{check['name']:<32} {check['detail']}")
+    else:
+        print(f"\nNOT SCORED: {probability.get('reason', 'no probabilities')}")
     print(f"\nWrote {out}")
     print("=======================================================")
 

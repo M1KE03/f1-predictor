@@ -23,6 +23,7 @@ from .leakage import (past_expanding_mean, past_mean_excluding_current_race,
                       past_rolling_mean, sort_frame)
 from .preprocessing import FillPolicy
 from .qualifying import add_qualifying_pace
+from .ratings import add_pace_ratings
 from .teammate import add_teammate_features
 from .weather import add_weather_affinity
 
@@ -82,6 +83,7 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
     df = add_weather_affinity(df)   # resets index via merge_asof; stays sorted
     df = add_circuit_history(df)
     df = add_reliability(df)
+    df = add_pace_ratings(df)      # recency-weighted race pace, PRIOR races
     df = add_teammate_features(df)
     # Current-weekend pace. Purely within-race, so it neither reads nor
     # affects any historical aggregate above it.

@@ -38,14 +38,16 @@ import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Final, Iterator
 
 import numpy as np
 import pandas as pd
 
+from .blend_rank import add_blended_score
 from .columns import FEATURE_COLS, TARGET
 from .metrics import ensure_labels
 from .preprocessing import FillPolicy
+from .probabilities import add_probabilities, fit_temperature
 
 log = logging.getLogger("backtest")
 
@@ -182,6 +184,40 @@ def make_folds(df: pd.DataFrame, scheme: str = ROLLING, **kwargs) -> list[Fold]:
     raise ValueError(f"Unknown fold scheme {scheme!r}; expected {SEASON!r} or {ROLLING!r}.")
 
 
+# Blend weights swept inside each fold. 0 = ranker only, 1 = grid only.
+ALPHA_GRID: Final = tuple(round(a, 2) for a in np.arange(0.0, 1.01, 0.1))
+
+# The objective alpha is selected against. Winner accuracy is the project's
+# stated goal; podium overlap breaks ties between alphas that pick the same
+# number of winners, which is common on a 20-race validation block.
+ALPHA_OBJECTIVE: Final = ("winner_accuracy", "podium_overlap")
+
+
+def select_alpha(val: pd.DataFrame,
+                 grid: tuple[float, ...] = ALPHA_GRID) -> float:
+    """Choose the blend weight on VALIDATION rows, by winner then podium.
+
+    Never call this on training or test rows. Selecting on test is leakage;
+    selecting on training overfits the weight to data the models already saw.
+    """
+    from .metrics import race_metrics
+
+    best_alpha, best_score = grid[-1], None
+    for alpha in grid:
+        scored = val.assign(_b=add_blended_score(val, "rank_score", alpha))
+        m = race_metrics(scored, "_b", ascending=True)
+        key = tuple((m[name] if m[name] is not None else -1.0)
+                    for name in ALPHA_OBJECTIVE)
+        # `>=` with an ascending grid means ties go to the HIGHER alpha, i.e.
+        # to the grid baseline. The model has to demonstrably beat the baseline
+        # to earn weight; where nothing separates the options, the simpler one
+        # wins. With `>` the sweep silently defaulted to alpha 0 -- full weight
+        # on the ranker for free -- whenever no alpha stood out.
+        if best_score is None or key >= best_score:
+            best_score, best_alpha = key, alpha
+    return float(best_alpha)
+
+
 # ---------------------------------------------------------------------------
 # Fitting one fold
 # ---------------------------------------------------------------------------
@@ -225,7 +261,43 @@ def fit_and_predict(prefill: pd.DataFrame, fold: Fold,
     out["fold"] = fold.name
     out["p_top10"] = clf.predict_proba(test[FEATURE_COLS])[:, 1]
     out["rank_score"] = ranker.predict(test[FEATURE_COLS])
+
+    # Blend weight chosen INSIDE this fold's validation block, against the
+    # objective the project is actually judged on. Two defects closed at once:
+    # alpha was a fixed constant carried in from outside every fold (a small
+    # leak), and it was selected by Spearman while winner/podium is the goal
+    # (FIX_PLAN.md section 2, P1). The alpha sweep showed the second is not
+    # theoretical -- Spearman peaks near 0.5 while winner accuracy peaks at 0.
+    alpha = select_alpha(val.assign(
+        rank_score=ranker.predict(val[FEATURE_COLS])))
+    out["alpha"] = alpha
+    out["blend_score"] = add_blended_score(out, "rank_score", alpha)
+
+    # Race-level probabilities. The temperature is fitted on THIS fold's
+    # validation block: it changes confidence without changing order, so
+    # fitting it on the test block would flatter every probability metric while
+    # leaving the ranking metrics untouched -- an easy leak to miss.
+    temperature = fit_temperature(
+        val.assign(rank_score=ranker.predict(val[FEATURE_COLS])), "rank_score")
+    out["temperature"] = temperature
+    out = add_probabilities(out, "rank_score", temperature)
+
+    # A probabilistic GRID baseline. A deterministic order has no win
+    # probabilities of its own, so "better winner log loss" needs something to
+    # be better than (FIX_PLAN.md section 8: "a one-parameter grid-utility
+    # distribution fitted on development data"). Utility is minus the grid
+    # position, with its own temperature fitted on the same validation block.
+    val_grid = val.assign(_u=-val["grid_position"].astype(float))
+    grid_temperature = fit_temperature(val_grid, "_u")
+    out["_u"] = -out["grid_position"].astype(float)
+    grid_probs = add_probabilities(out, "_u", grid_temperature)
+    for column in ("p_win", "p_podium", "p_top10"):
+        out[f"{column}_grid"] = grid_probs[column].to_numpy()
+    out["grid_temperature"] = grid_temperature
+    out = out.drop(columns=["_u"])
+
     out.attrs["policy"] = policy.constants
+    out.attrs["alpha"] = alpha
     out.attrs["best_iteration"] = {"classifier": clf.best_iteration_,
                                    "ranker": ranker.best_iteration_}
     return out
@@ -240,6 +312,8 @@ def run(prefill: pd.DataFrame, folds: list[Fold]) -> tuple[pd.DataFrame, list[di
                  fold.manifest["n_races"]["val"], fold.manifest["n_races"]["test"])
         predictions = fit_and_predict(prefill, fold)
         manifests.append({**fold.manifest,
+                          "alpha": predictions.attrs["alpha"],
+                          "temperature": float(predictions["temperature"].iloc[0]),
                           "best_iteration": predictions.attrs["best_iteration"],
                           "fitted_constants": predictions.attrs["policy"]})
         frames.append(predictions)

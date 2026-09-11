@@ -51,6 +51,12 @@ FEATURE_COLS = [
     "quali_gap_pct", "quali_gap_to_median_pct", "quali_pace_vs_teammate_pct",
     "quali_stage_reached", "quali_field_spread_pct", "quali_no_time",
     "q1_gap_pct",
+    # Recency-weighted race pace (src/ratings.py). The first features that
+    # measure how FAST a car is over a stint rather than where it started.
+    # Aggregated over PRIOR races only.
+    "driver_pace_ewm_3", "driver_pace_ewm_12", "driver_pace_trend",
+    "team_pace_ewm_3", "team_pace_ewm_12", "team_pace_trend",
+    "driver_pace_vs_team", "driver_pace_sd_ewm", "driver_pace_races",
 ]
 
 # ---------------------------------------------------------------------------
@@ -89,6 +95,9 @@ ID_COLS += ["air_temp", "track_temp", "humidity", "wind_speed", "rainfall", "is_
 # quali_best_s is the min across segments and is NOT comparable between drivers
 # -- it stays out of the model deliberately.
 ID_COLS += ["q1_s", "q2_s", "q3_s", "quali_best_s", "gap_to_pole_s"]
+# Raw race pace: an OUTCOME of the race it describes, so it is an identifier
+# here and only ever reaches the model through src/ratings.py history.
+ID_COLS += ["race_pace_pct", "race_pace_laps", "race_pace_sd_pct"]
 
 assert not (set(FEATURE_COLS) & set(WEATHER_REMOVED)), \
     "Race-session weather must not re-enter FEATURE_COLS without a proven forecast source."

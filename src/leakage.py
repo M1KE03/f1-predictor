@@ -95,3 +95,44 @@ def past_mean_excluding_current_race(df, group_cols, value_col):
     merged = df[keys + ["date"]].merge(
         per_race[keys + ["date", "_val"]], on=keys + ["date"], how="left")
     return pd.Series(merged["_val"].to_numpy(), index=df.index)
+
+
+def past_ewm_mean(df, group_cols, value_col, half_life):
+    """Exponentially weighted mean over each group's PRIOR races only.
+
+    Recency weighting matters for car performance in a way it does not for
+    driver identity: a team that was slow in March may be quick by September,
+    and an expanding mean dilutes that with stale evidence. FIX_PLAN.md section
+    5.C prescribes exponential weighting with a tunable half-life.
+
+    The shift(1) is applied BEFORE the weighting, so the current race is
+    excluded exactly as in every other helper here.
+    """
+    assert_sorted(df)
+    alpha = 1.0 - 0.5 ** (1.0 / float(half_life))
+    return (
+        df.groupby(group_cols, sort=False)[value_col]
+          .transform(lambda s: s.shift(1).ewm(alpha=alpha, ignore_na=True).mean())
+    )
+
+
+def past_ewm_mean_excluding_current_race(df, group_cols, value_col, half_life):
+    """Recency-weighted mean over PRIOR RACES, for groups with several rows per
+    race (a team has two drivers). Plain shift(1) would leave the second row
+    seeing its teammate's current-race value -- see
+    past_mean_excluding_current_race for the same trap in the unweighted case.
+    """
+    assert_sorted(df)
+    keys = list(group_cols) if isinstance(group_cols, (list, tuple)) else [group_cols]
+    alpha = 1.0 - 0.5 ** (1.0 / float(half_life))
+
+    per_race = (df.groupby(keys + ["date"], as_index=False)
+                  .agg(_v=(value_col, "mean"))
+                  .sort_values("date", kind="mergesort"))
+    per_race["_ewm"] = (
+        per_race.groupby(keys, sort=False)["_v"]
+                .transform(lambda s: s.shift(1).ewm(alpha=alpha, ignore_na=True).mean())
+    )
+    merged = df[keys + ["date"]].merge(
+        per_race[keys + ["date", "_ewm"]], on=keys + ["date"], how="left")
+    return pd.Series(merged["_ewm"].to_numpy(), index=df.index)

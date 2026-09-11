@@ -174,6 +174,71 @@ def quali_frame(session_q) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# Race pace (FIX_PLAN.md section 5.C)
+# ---------------------------------------------------------------------------
+def race_pace_summary(session) -> pd.DataFrame:
+    """Per-driver clean-air race pace, relative to the field median.
+
+    Nothing in the feature set measures how FAST a car is over a stint -- only
+    where it started and where it historically finished. Grid position is the
+    qualifying result, and increment 3.1 established that qualifying pace adds
+    nothing beyond qualifying order. Race pace is a genuinely different
+    measurement.
+
+    Laps are filtered to green-flag, accurate, non-pit, non-deleted running
+    (FIX_PLAN.md section 5.D). Safety-car and VSC laps are excluded because
+    their times say more about the safety car than the car.
+
+    Expressed as a percentage of the field median so it is comparable across
+    circuits: -1.5% means the same at Monaco and at Spa.
+
+    This describes a COMPLETED race, so it is only ever usable as history for a
+    LATER race. It must go through the leakage-safe aggregation like any other
+    outcome column -- see src/ratings.py.
+    """
+    empty = pd.DataFrame(columns=["driver", "race_pace_pct", "race_pace_laps",
+                                  "race_pace_sd_pct"])
+    laps = getattr(session, "laps", None)
+    if laps is None or len(laps) == 0:
+        return empty
+
+    frame = laps.copy()
+    seconds = pd.to_timedelta(frame["LapTime"], errors="coerce").dt.total_seconds()
+
+    clean = (
+        (frame["TrackStatus"].astype(str) == "1")       # green flag only
+        & (frame["IsAccurate"] == True)                  # noqa: E712 -- FastF1 flag
+        & seconds.notna()
+        & frame["PitInTime"].isna()                      # not an in-lap
+        & frame["PitOutTime"].isna()                     # not an out-lap
+    )
+    if "Deleted" in frame.columns:
+        clean &= frame["Deleted"] != True                # noqa: E712
+
+    good = frame[clean].assign(_secs=seconds[clean])
+    if good.empty:
+        return empty
+
+    median = good.groupby("Driver")["_secs"].median()
+    field_median = float(median.median())
+    if not np.isfinite(field_median) or field_median <= 0:
+        return empty
+
+    counts = good.groupby("Driver")["_secs"].size()
+    spread = good.groupby("Driver")["_secs"].std()
+
+    return pd.DataFrame({
+        "driver": median.index.astype(str),
+        "race_pace_pct": (100.0 * (median / field_median - 1.0)).to_numpy(),
+        "race_pace_laps": counts.reindex(median.index).to_numpy(float),
+        # Consistency, as a percentage of the driver's own median, so it is
+        # comparable across circuits with very different lap lengths.
+        "race_pace_sd_pct": (100.0 * spread.reindex(median.index)
+                             / median).to_numpy(),
+    })
+
+
+# ---------------------------------------------------------------------------
 # Per-race extraction (spec 1.3 / 1.4 / 1.5)
 # ---------------------------------------------------------------------------
 def _reject_hollow_results(df: pd.DataFrame, year: int, rnd: int) -> None:
@@ -253,6 +318,15 @@ def race_rows(session, event, year: int, rnd: int) -> pd.DataFrame:
 
     df = pd.DataFrame(rows)
     _reject_hollow_results(df, year, rnd)
+
+    # Clean-air race pace from this race's laps. Historical only -- it describes
+    # the race that just happened and is aggregated over PRIOR races downstream.
+    try:
+        df = df.merge(race_pace_summary(session), on="driver", how="left")
+    except Exception as e:                     # lap data is optional, never fatal
+        log.warning("No race pace for %s round %s: %s", year, rnd, e)
+        for col in ("race_pace_pct", "race_pace_laps", "race_pace_sd_pct"):
+            df[col] = np.nan
 
     # Separate the conflated outcome concepts (FIX_PLAN section 2, P0-6):
     # result_order / officially_classified / started / finished /
