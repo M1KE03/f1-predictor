@@ -17,6 +17,8 @@ import lightgbm as lgb
 import pandas as pd
 
 from .columns import FEATURE_COLS, TARGET
+# Re-exported so existing callers (train_rank, blend_rank) keep working.
+from .splits import chronological_split  # noqa: F401
 
 log = logging.getLogger("train")
 
@@ -41,20 +43,6 @@ PARAMS = dict(
     # top-10 is roughly balanced (~45% positive): no is_unbalance (spec 4.2).
     random_state=RANDOM_STATE,
 )
-
-
-def chronological_split(df: pd.DataFrame):
-    latest = int(df["year"].max())
-    train = df[df["year"] <= latest - 2]
-    val = df[df["year"] == latest - 1]
-    test = df[df["year"] == latest]
-    if len(train) == 0 or len(val) == 0 or len(test) == 0:
-        raise ValueError(
-            f"Chronological split produced an empty set "
-            f"(latest={latest}, sizes: train={len(train)}, val={len(val)}, "
-            f"test={len(test)}). Need at least 3 seasons of data."
-        )
-    return train, val, test, latest
 
 
 def main():

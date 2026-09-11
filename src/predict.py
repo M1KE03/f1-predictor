@@ -32,13 +32,10 @@ import numpy as np
 import pandas as pd
 
 from .blend_rank import add_blended_score
-from .build_features import add_recent_form, add_reliability
-from .circuit import add_circuit_history
-from .columns import FEATURE_COLS, TARGET
-from .leakage import sort_frame
+from .columns import FEATURE_COLS
+from .features import build_asof_features
 from .metrics import pred_rank_by_race
-from .teammate import add_teammate_features
-from .weather import add_weather_affinity
+from .preprocessing import FillPolicy, assert_no_missing
 
 log = logging.getLogger("predict")
 
@@ -65,17 +62,6 @@ def build_placeholder_rows(raw: pd.DataFrame, year: int, rnd: int,
     ))
 
 
-def run_pipeline(df: pd.DataFrame) -> pd.DataFrame:
-    """Same feature steps as build_features.build(), minus the file I/O."""
-    df = sort_frame(df)
-    df = add_recent_form(df)
-    df = add_weather_affinity(df)
-    df = add_circuit_history(df)
-    df = add_reliability(df)
-    df = add_teammate_features(df)
-    return df
-
-
 def roster_from_session(year: int, rnd: int, session: str = "Q") -> pd.DataFrame:
     """Entry list for the target race taken from a session that has already run.
 
@@ -99,7 +85,8 @@ def roster_from_session(year: int, rnd: int, session: str = "Q") -> pd.DataFrame
 
 
 def predict(year: int, rnd: int, grid_overrides: dict[str, int] | None = None,
-            roster: pd.DataFrame | None = None) -> pd.DataFrame:
+            roster: pd.DataFrame | None = None,
+            models_dir: Path = MODELS_DIR) -> pd.DataFrame:
     import fastf1
     fastf1.Cache.enable_cache(str(PROJECT_ROOT / "cache"))
 
@@ -129,8 +116,9 @@ def predict(year: int, rnd: int, grid_overrides: dict[str, int] | None = None,
                  event_name, len(roster))
 
     placeholder = build_placeholder_rows(raw, year, rnd, event_name, circuit_id, date, roster)
-    combined = pd.concat([raw, placeholder], ignore_index=True)
-    combined = run_pipeline(combined)
+    # THE shared path. Imputation is deferred until the grid is known, so no
+    # policy is passed here.
+    combined = build_asof_features(raw, placeholder)
 
     target_mask = (combined["year"] == year) & (combined["round"] == rnd)
 
@@ -153,21 +141,16 @@ def predict(year: int, rnd: int, grid_overrides: dict[str, int] | None = None,
             combined.loc[target_mask & combined["driver"].isin(pit_lane), "grid_position"] = 20.0
             combined.loc[target_mask & combined["driver"].isin(pit_lane), "pit_start"] = 1
 
-    with open(MODELS_DIR / "fill_values.json") as f:
-        fills = json.load(f)
-    for col, val in fills.items():
-        if col in combined.columns:
-            combined[col] = combined[col].fillna(val)
-    combined["pit_start"] = combined["pit_start"].fillna(0).astype(int)
+    # The SAME fitted policy the model was trained with, replayed exactly --
+    # including the driver-prior fallback the old serving path skipped, which
+    # gave 2091 cells a different value here than in training.
+    policy = FillPolicy.from_json(models_dir / "fill_values.json")
+    combined = policy.transform(combined)
+    assert_no_missing(combined.loc[target_mask], FEATURE_COLS)
 
-    missing = combined.loc[target_mask, FEATURE_COLS].isna().sum()
-    bad = missing[missing > 0]
-    if len(bad):
-        raise AssertionError(f"NaNs remain in inference features:\n{bad}")
-
-    clf = joblib.load(MODELS_DIR / "model.joblib")
-    ranker = joblib.load(MODELS_DIR / "rank_model.joblib")
-    with open(MODELS_DIR / "blend_alpha.json") as f:
+    clf = joblib.load(models_dir / "model.joblib")
+    ranker = joblib.load(models_dir / "rank_model.joblib")
+    with open(models_dir / "blend_alpha.json") as f:
         alpha = json.load(f)["alpha"]
 
     race = combined.loc[target_mask, ["driver", "team", "grid_position"]].copy()
@@ -197,6 +180,8 @@ def main():
     ap.add_argument("--grid", type=str, default=None,
                      help='JSON mapping driver abbreviation -> real grid position, '
                           'e.g. \'{"ANT":1,"LEC":2}\'. Overrides the assumed grid.')
+    ap.add_argument("--models-dir", type=Path, default=MODELS_DIR,
+                    help="model bundle directory (default: models/)")
     ap.add_argument("--from-quali", action="store_true",
                     help="pull the entry list AND the real grid from the "
                          "target round's qualifying session (must have run)")
@@ -225,7 +210,7 @@ def main():
         print("NOTE: grid_position is ASSUMED (real qualifying result not yet "
               "available) and weather is filled with training-set global means "
               "(no forecast ingested).\n")
-    out = predict(args.year, args.round, grid_overrides, roster)
+    out = predict(args.year, args.round, grid_overrides, roster, args.models_dir)
     print(out.to_string(index=False))
 
 

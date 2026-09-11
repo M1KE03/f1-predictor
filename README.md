@@ -1,61 +1,189 @@
-# F1 Top-10 Finish Predictor
+# F1 race-result predictor
 
-Binary classification: for each (driver, race), predict `P(driver finishes in the top 10)`. Data from FastF1 (2018+), model is LightGBM. Built to the accompanying build specification; the golden rule throughout is that every feature is computable strictly before lights-out from prior races only.
+Forecasts a Formula 1 race **after qualifying, before the start**. The goal is
+winner and podium accuracy; full-field ordering is kept as a guardrail.
+
+Data comes from [FastF1](https://docs.fastf1.dev/). Models are LightGBM. The
+governing rule is that every feature must be computable from information
+available at the forecast cutoff — not merely from prior races. Those are
+different guarantees, and the gap between them hid a real leak (see
+[Corrections](#corrections-applied)).
+
+> **Status: under repair.** The project is working through the diagnosis in
+> [`FIX_PLAN.md`](FIX_PLAN.md). Milestone 1 (correctness) is partly done;
+> milestones 2–6 (evaluation harness, qualifying features, model comparison)
+> have not started. **No model currently beats sorting by starting grid** for
+> winner or podium. Do not treat its output as validated.
 
 ## Setup
 
-Python 3.10 or 3.11 recommended (developed and smoke-tested on 3.12; no 3.12-specific syntax is used).
-
-```
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+```bash
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -r requirements.txt -r requirements-dev.txt
 ```
 
-Run everything from the project root as modules (`python -m src.<name>`); `src` is a package and modules use relative imports.
+`requirements.lock.txt` pins the exact environment that produced
+`reports/baseline.json`. Python 3.12 is what this is developed on.
 
-## Build order (spec section 7)
+Run everything from the project root as modules — `src` is a package and uses
+relative imports.
 
+## Artifact layout
+
+Two parallel sets, and the distinction matters:
+
+| Location | What | Rule |
+| --- | --- | --- |
+| `data/`, `models/` | **Frozen legacy** artifacts, hashed in `reports/baseline.json` | Never overwrite. They are the evidence of what the project scored before the corrections. |
+| `data/v2/`, `models/v2/` | **Current corrected pipeline** | Rebuilt by each increment. A working area, not a version history. |
+
+`data/raw_results.parquet` is shared by both: ingestion has not been re-run.
+
+## Running the corrected pipeline
+
+```bash
+python -m src.build_features --raw data/raw_results.parquet --out-dir data/v2
+python -m src.audit_leakage  --data-dir data/v2 --n-rows 5      # GATE 2
+python -m src.train          --features data/v2/features.parquet --models-dir models/v2
+python -m src.train_rank     --features data/v2/features.parquet --models-dir models/v2
+python -m src.blend_rank     --features data/v2/features.parquet --models-dir models/v2 --write
+python -m src.evaluate_rank  --models-dir models/v2
+python -m pytest
 ```
-python -m src.ingest            # 2018 -> latest; prints VALIDATION GATE 1
-python -m src.build_features    # spec sections 2-3
-python -m src.audit_leakage     # VALIDATION GATE 2 -- mandatory, non-zero exit on fail
-python -m src.train             # chronological split + LightGBM early stopping
-python -m src.evaluate          # VALIDATION GATE 3 -- model vs grid baseline
+
+Re-ingesting needs network access to FastF1's endpoints:
+
+```bash
+python -m src.ingest            # 2018 -> latest; prints GATE 1
 ```
 
-Do not skip gates. Gate 1 requires a manual spot-check of one famous race against reality. Gate 3 is only a pass if the model beats the grid-position baseline on **both** set-overlap and Spearman; a tie is a null result and the script says so.
+`python -m src.baseline` re-measures the frozen legacy artifacts and *compares*
+against `reports/baseline.json` rather than overwriting it. It needs `--force`
+to replace the record — deliberately, so the pre-correction reference cannot be
+destroyed by a routine re-run.
 
-The inference entry point (spec section 6) is deliberately not implemented yet: per the spec's build order it comes only after Gate 3 passes on real data.
+## Data actually present
 
-## What ships in this repo
+**2022–2026**, 2,080 driver-race rows, 103 races, last race 2026-07-26. Real
+FastF1 data, not synthetic.
 
-- `src/columns.py` — single source of truth for `FEATURE_COLS` / identifiers / target.
-- `src/leakage.py` — the leakage-safe aggregation helpers (`shift(1)` pattern), including `past_mean_excluding_current_race` for team-grouped features (see "Leakage note" below).
-- `src/ingest.py` — schedule iteration, safe session loading, results/weather/quali extraction, `TEAM_CANONICAL` mapping, Gate 1.
-- `src/weather.py`, `src/circuit.py`, `src/teammate.py`, `src/build_features.py` — spec sections 2.1–2.5, plus reliability and constructor-points-prior features and the missing-value policy (fills saved to `data/fill_values.json` for identical treatment at inference).
-- `src/audit_leakage.py` — Gate 2: independent naive recomputation of seven features on random rows across seasons, plus a global check that every driver's first-ever race (and first visit to each circuit) carries only NaN-before-fill values, plus neutrality of teammate deltas at debuts.
-- `src/train.py`, `src/evaluate.py` — spec sections 4–5, including the grid baseline and the feature-importance plot (`reports/feature_importance.png`).
-- `src/make_synthetic.py` — test harness only. Generates `data/raw_results.parquet` with the exact ingestion schema and planted latent structure so the pipeline can be exercised without network access. **Not real data; gates only count on real data.**
+| Season | Rows | Races | Role |
+| --- | ---: | ---: | --- |
+| 2022–2024 | 1,359 | 68 | train |
+| 2025 | 479 | 24 | validation |
+| 2026 | 242 | 11 | test (held out) |
 
-## Sandbox verification status
+2018–2021 is **not** ingested. Recovering it roughly triples the data and is a
+prerequisite for the expanding-window backtests in `FIX_PLAN.md` §8.
 
-This codebase was built in an environment where FastF1's data endpoints (`livetiming.formula1.com`, `api.jolpi.ca`) are blocked, so real ingestion has not been run yet. What **has** been verified end to end on the synthetic dataset (2,800 rows, 140 races, 7 seasons): feature building, the full Gate 2 audit (all checks pass, two seeds), training with early stopping, and evaluation including the baseline comparison and its honest-failure path. Your first local step is `python -m src.ingest` followed by the Gate 1 spot-check, then re-running everything downstream on the real parquet.
+## Where things live
 
-## Leakage note (found and fixed by the Gate 2 audit)
+| Module | Role |
+| --- | --- |
+| `columns.py` | Single source of truth: `FEATURE_COLS`, `ID_COLS`, `WEATHER_REMOVED` |
+| `labels.py` | Result vocabulary — `result_order`, `officially_classified`, `started`, `finished`, `status_category` |
+| `leakage.py` | The `shift(1)` helpers every historical aggregation routes through |
+| `features.py` | **The single as-of feature path**, shared by training and inference |
+| `preprocessing.py` | `FillPolicy` — imputation fitted on training rows, frozen, replayed at serving |
+| `splits.py` | Chronological partitioning |
+| `metrics.py` | Race metrics + the deterministic tie policy |
+| `weather.py`, `circuit.py`, `teammate.py` | Feature families |
+| `ingest.py` | FastF1 → `raw_results.parquet`, team canonicalisation, Gate 1 |
+| `audit_leakage.py` | Gate 2 — independent naive recomputation |
+| `baseline.py` | Frozen legacy record (`reports/baseline.json`) |
+| `build_features.py`, `train.py`, `train_rank.py`, `blend_rank.py`, `evaluate*.py`, `predict.py` | Pipeline entry points |
+| `make_synthetic.py` | Test harness only. **Not real data** |
 
-Team-grouped historical features are a trap: a team has two rows per race, so the canonical `groupby(...).shift(1)` excludes only the current *row* — the second driver's row would still see the same-race teammate's outcome. `team_dnf_rate` and `team_circuit_avg_finish` therefore aggregate to one row per (team, race) first and shift at race level, excluding the entire current race. The audit's independent date-based recomputation is what caught this; keep it in the loop for any new feature.
+## Corrections applied
 
-## Deviations from / interpretations of the spec
+Detailed reasoning for each is in [`REASONING.md`](REASONING.md).
 
-- **Fill policy scales (2.5):** "fill with `driver_overall_avg_finish`" is applied to finishing-position-scaled features only. `form_avg_points_3` is filled with 0 (points scale), DNF/podium *rates* with their global means, deltas with 0 (neutral), counts with 0, flags with their spec defaults. Everything is recorded in `data/fill_values.json`.
-- **Pit-lane starts:** `grid_position = 20` per spec 1.5. With 22-car grids (2026, Cadillac) "back of grid" is 22; noted as a v2 refinement, not changed here.
-- **Quali pace (1.5):** `quali_best_s` / `gap_to_pole_s` are ingested and stored as raw columns for future use, but are not in `FEATURE_COLS` — spec section 3 defines the v1 matrix and grid features come from `GridPosition` (which already reflects penalties).
-- **Temperature bins:** cool `<30`, hot `>45`, medium otherwise (30 and 45 inclusive in medium).
-- **Spearman (5.2):** computed on classified drivers only, since DNFs have no finishing position; set-overlap uses denominator 10 per spec even in races with fewer than 10 classified finishers.
-- **`driver_overall_avg_finish`** is computed (spec 2.2) and kept in the parquet as a helper for fills and auditing, but excluded from `FEATURE_COLS`, matching the spec's section-3 list exactly.
-- **Circuit id:** slug of `event['Location']`, stable across seasons. Known blind spot: the 2020 Sakhir GP outer layout shares `sakhir` with the Bahrain GP. Acceptable for v1.
-- **`TEAM_CANONICAL`:** Force India → Racing Point → Aston Martin; Toro Rosso → AlphaTauri → RB → Racing Bulls; Sauber → Alfa Romeo → Kick Sauber → Audi; Renault → Alpine. Unmapped names fall back to a slug with a loud warning — extend the dict deliberately when that fires.
+- **Label semantics.** The inherited `classified = notna(Position)` was true for
+  2,078 of 2,080 rows, so it could not distinguish a winner from a non-starter.
+  Split into independent fields. `result_order` preserves the published
+  classification — retirements keep their real places rather than collapsing to
+  last.
+- **Deterministic ordering.** `rank(method='first')` broke ties by row order, so
+  the same entry list in a different order produced a different predicted
+  podium. Ties now break on score → grid → driver id, all pre-race information.
+  Row-shuffle Spearman spread: 0.0080 → **0**.
+- **Metric honesty.** `top1_hit_rate` (true when the top pick finished anywhere
+  in the top ten) renamed to `top_pick_finished_top10`. The single ambiguous
+  `spearman` split into `spearman_all` and `spearman_finishers`, each with its
+  own denominator.
+- **Race-weather leakage.** Eight features removed. Six were averaged over the
+  *race session*. The other two, `driver_temp_bin_*`, were subtler: their values
+  were historical, so Gate 2 passed them, but the *bucket selection* used the
+  target race's realized track temperature. `driver_wet_*` was checked and
+  **kept** — it counts prior wet races and does not reveal the target's
+  conditions.
+- **Fitted preprocessing.** Imputation constants were computed over the whole
+  frame before the split. Now fitted on training rows only (mean finish 10.4790,
+  not 10.5982).
+- **One feature path.** Training and inference each built their own feature
+  vector and disagreed on 2,091 cells. Both now call
+  `features.build_asof_features()`.
 
-## Known caveats (spec section 8 — do not hand-tune around these)
+### Not yet fixed
 
-Finishing position is mostly the car; teammate-relative and constructor features exist for exactly that reason. All-history circuit stats blur car changes across years (recency-weighting is v2). The model partly predicts reliability because DNFs stay in the target — intended. Every small-sample affinity ships with its `_n` count so the model can discount noise on its own.
+- Qualifying pace (`quali_best_s`, `gap_to_pole_s`) is ingested, 98.9%
+  populated, and **unused**.
+- `form_avg_quali_3` averages prior *starting grids*, not qualifying pace.
+  `quali_gap_to_teammate` compares those averages. `constructor_standing_prior`
+  is cumulative points, not a standings rank, and omits sprint points.
+- Blend alpha is selected by Spearman, not by winner/podium.
+- `predict.py --from-quali` reads qualifying position as if it were the grid,
+  ignoring penalties, and assigns absent drivers a hard-coded pit start at 20.
+- No model bundle binding data hash, features, fitted state, cutoff and model.
+- Evaluation prints failures but exits 0.
+
+## Results, held-out 2026 (11 races)
+
+| Method | Winner | Podium | Top-10 | Spearman (all) | Spearman (finishers) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| **Starting grid** | **0.7273** | 0.5758 | 0.7364 | **0.6432** | **0.8450** |
+| Top-10 classifier | 0.1818 | 0.4242 | 0.7636 | 0.5812 | 0.7856 |
+| LambdaRank | 0.5455 | **0.6061** | 0.7182 | 0.4949 | 0.7296 |
+| Blend (α=0.5) | **0.7273** | 0.5758 | 0.7364 | 0.6055 | 0.8101 |
+
+**Read this carefully.** The blend selects exactly the same winners as the raw
+starting grid (8 of 11). The machine learning adds nothing over "sort by grid
+position" for the task the project exists to do.
+
+Two caveats that must travel with these numbers:
+
+1. **Eleven races.** One race is 9.1 percentage points of winner accuracy.
+   `FIX_PLAN.md` §8 is explicit that this sample cannot rank candidates.
+   Nothing in the table is statistically meaningful.
+2. The LambdaRank Spearman partly reflects the tie-break, not the model: 32% of
+   its rows are tied and fall back to grid order.
+
+If you have seen "~85%" quoted for this project, that was the classifier's
+**validation AUC**, not accuracy of finishing positions.
+
+## Tests
+
+`python -m pytest` — 97 tests. They target the specific failure modes in
+`FIX_PLAN.md` §10, not coverage for its own sake:
+
+- **Replay parity**: hiding a real race's outcome and feeding it back through
+  the inference path reproduces the training feature vector exactly. This
+  catches both serving drift and any feature that reads its own race's results.
+- **Permutation invariance**: shuffling driver rows changes no prediction,
+  ordering or metric.
+- **Label fixtures**: normal finish, lapped runner, classified retirement, DNS,
+  DSQ, withdrawal.
+- **Feature contract**: race-session weather cannot re-enter `FEATURE_COLS`.
+- **Fitted state**: changing held-out outcomes cannot move training constants.
+
+## Known modelling caveats
+
+Finishing position is mostly the car — teammate-relative and constructor
+features exist for that reason. All-history circuit stats blur car changes
+across seasons; recency weighting and shrinkage are milestone 3. The model
+partly predicts reliability because retirements stay in the target, which is
+intended. Every small-sample affinity ships with its `_n` count so the model can
+discount noise itself.
+
+Circuit id is a slug of the event location. Known blind spot: the 2020 Sakhir GP
+outer layout shares `sakhir` with the Bahrain GP.

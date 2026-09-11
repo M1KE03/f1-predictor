@@ -691,4 +691,125 @@ tension between correctness and performance here.
 
 ---
 
+## [007] Fit preprocessing on training rows only, behind one shared feature path
+
+**Date:** 2026-09-11 - **Milestone:** 1 (increments 1.5 + 1.6) - **Files:**
+`src/preprocessing.py` (new), `src/features.py` (new), `src/splits.py` (new),
+`src/build_features.py`, `src/predict.py`, `src/train.py`,
+`tests/test_parity.py` (new), `README.md`
+**Status:** implemented
+
+### Before
+
+`build_features.apply_fill_policy()` computed its constants over the whole frame
+and then imputed everything, before `train.chronological_split()` ever ran.
+Separately, `predict.py` had its own `run_pipeline()` and applied the saved
+constants with a flat `fillna` loop.
+
+### After
+
+`FillPolicy.fit()` sees the training partition only; `FillPolicy.transform()` is
+the one implementation both paths call; `to_json()` stores the fitted constants
+**together with the category lists defining the fallback chain**, so serving
+replays the saved logic rather than whatever the current source says.
+`features.build_asof_features(history, upcoming, policy)` is the single feature
+path. `predict.run_pipeline()` is deleted. `chronological_split` moved to
+`src/splits.py` so feature building can reach it without importing LightGBM.
+
+### Why
+
+- **These were one defect, not two.** Fitting on everything (P0-2) and the
+  train/serve mismatch (P0-3) are the same missing object seen from opposite
+  ends: there was no fitted state, only constants recomputed in one place and
+  partially reapplied in another. Splitting them across two increments would
+  have meant building the object twice.
+- **Measured, not assumed.** Full-data mean finish 10.5982 against 10.4790 on
+  training - reproducing FIX_PLAN.md's figure exactly. The serving gap is 2091
+  cells across six features: driver_circuit_avg_finish 736,
+  driver_circuit_best_finish 736, team_circuit_avg_finish 540,
+  season_avg_finish 79.
+- **The policy stores its own category lists.** Storing only constants would
+  let a later edit to POSITION_SCALED silently change how an existing model's
+  inputs are imputed, with no error. `schema_version` makes an incompatible
+  policy a loud failure instead.
+- **The replay test is the real deliverable.** Taking a real race, hiding its
+  outcome, feeding it back as a not-yet-run event and requiring the identical
+  feature vector tests serving parity AND leakage in one assertion: if any
+  feature for race R reads R's own results - its own, a teammate's, anyone's in
+  that race - the vector changes and the test fails. It passes for both the
+  final race and a mid-dataset race, the latter also proving that later results
+  cannot reach back into an earlier forecast.
+
+### The metrics moved DOWN this time
+
+Unlike [006]. On the held-out 2026 season, against the frozen legacy baseline:
+
+| | legacy | after 1.4 | after 1.5+1.6 |
+| --- | ---: | ---: | ---: |
+| classifier ROC-AUC | 0.7908 | 0.8178 | **0.8153** |
+| classifier log-loss | 0.5440 | 0.5258 | **0.5290** |
+| ranker spearman_all | 0.5005 | 0.5394 | **0.4949** |
+| ranker podium overlap | 0.5758 | 0.6061 | **0.6061** |
+| blend spearman_all | 0.6289 | 0.6240 | **0.6055** |
+| blend top-10 overlap | 0.7545 | 0.7545 | **0.7364** |
+| winner accuracy (all methods) | - | - | unchanged |
+
+The ranker and blend now sit slightly BELOW the legacy baseline on Spearman; the
+classifier stays well above it. This is the expected shape of removing a leak:
+the imputed constants no longer carry information from the held-out seasons, so
+some of the apparent skill went away with it. The val-test AUC gap stays halved
+(+0.0258 against the legacy +0.0547).
+
+Winner accuracy did not move anywhere, which remains the point: 8 of 11 for both
+grid and blend, before and after every correction so far.
+
+None of these differences is significant on 11 races. The defensible statement
+is that the corrected pipeline is now measuring the right thing, not that it is
+better or worse.
+
+### Trade-offs / what this costs
+
+- **`transform` is applied to the full frame, not per partition.** Correct -
+  validation and test rows must be transformed with training-fitted constants,
+  exactly as an unseen race would be - but it means `features.parquet` is no
+  longer a pure function of its own partition. The policy JSON records
+  `fitted_on` so this is auditable.
+- **Imputation happens after the grid override in `predict.py`**, because
+  `grid_position` is only known once qualifying has run. That ordering is now
+  load-bearing and undocumented outside the code comment.
+- **A schema bump invalidates old policies.** `models/fill_values.json` (the
+  frozen legacy flat dict) can no longer be loaded by `FillPolicy.from_json`.
+  Deliberate: the legacy models are served by `baseline.py`, which has its own
+  pinned copies and does not use this class.
+- **`add_recent_form` / `add_reliability` moved** from `build_features.py` to
+  `features.py`. Any external caller importing them from the old location
+  breaks. Nothing in-repo does.
+- The two misleading feature names (`form_avg_quali_3` averages prior grids;
+  `constructor_standing_prior` is cumulative points) are now documented at their
+  definitions but not renamed - that changes the stored schema.
+
+### Verification
+
+- 97 tests pass (10 new in `tests/test_parity.py`).
+- **Replay parity holds exactly** (`atol=1e-12`) for the final race and a
+  mid-dataset race.
+- Tampering with held-out outcomes provably cannot move the fitted constants.
+- `transform` is idempotent; the driver-prior-then-global chain is asserted
+  directly on the cells that previously diverged.
+- A policy with an unknown `schema_version` is refused rather than
+  reinterpreted.
+- Gate 2 passes on the rebuilt features.
+- The fitted policy records `n_rows: 1359, year_min: 2022, year_max: 2024`,
+  i.e. the training partition alone, and `global_mean_finish: 10.479`.
+- Every artifact hashed in `reports/baseline.json` is byte-intact.
+
+### Not done in this increment
+
+- `predict.py` still assigns absent drivers a hard-coded pit start at position
+  20 and reads qualifying position as the grid (P0-4).
+- No model bundle binding data hash, features, policy, cutoff and model (P1).
+- Evaluation still exits 0 on failure.
+
+---
+
 <!-- Append new entries above this line, newest last. -->
