@@ -7,7 +7,7 @@ Claude session and it should be able to continue without re-reading everything.
 any milestone lands. Keep it current, not comprehensive — detail lives in
 `REASONING.md` and `FIX_PLAN.md`.
 
-**Last updated:** 2026-09-11 — session 1 (milestones 0-2 complete; 2018-2021 recovered, 186 races)
+**Last updated:** 2026-09-11 — session 1 (milestones 0-2 complete; 3.1 done, NEGATIVE result)
 
 ---
 
@@ -128,7 +128,7 @@ fitted imputation state, or serving parity.
 | 0 | Preserve & reproduce: baseline.json, manifest, dep lock, README refresh | **0.1 DONE** (README refresh deferred to M1) |
 | 1 | Correct contracts & replay: weather, fitted state, labels, shared as-of path, deterministic ties | **DONE** (1.1-1.7). All five P0 defects closed |
 | 2 | Evaluation harness: `backtest.py`, `metrics.py`, real winner gates | **DONE** - 8 folds / 47 races; gates exit non-zero |
-| 3 | Qualifying & car features: `qualifying.py`, `ratings.py` | NOT STARTED |
+| 3 | Qualifying & car features: `qualifying.py`, `ratings.py` | **3.1 DONE, no gain** (see below); ratings/recency pending |
 | 4 | Model comparison M0-M4 (+ Plackett-Luce, winner/podium heads) | NOT STARTED |
 | 5 | Validated forecast output with model bundle + probabilities | NOT STARTED |
 | 6 | Optional: practice pace, forecast archive, TabPFN, custom NN | NOT STARTED |
@@ -272,31 +272,55 @@ python -m src.gates --backtest-dir reports/backtest_season
    FIX_PLAN.md says yes - without paired intervals over multiple folds, an
    11-race test season cannot tell whether a new feature helped.
 
+### Increment 3.1 result: qualifying pace does NOT help
+
+Seven per-segment qualifying-pace features added (22 -> 29 features). On the
+same 127 races, paired:
+
+- blend winner **+0.0000** [-0.0394, +0.0394]
+- rank_model winner **+0.0000** [-0.0551, +0.0551]
+- nothing resolves; blend podium and spearman are marginally WORSE
+- 2026 specifically: blend 10/13 winners -> 9/13
+
+The model uses them heavily - 38.6% of ranker gain, with
+`quali_gap_to_median_pct` second overall at 31.3% - but outcomes do not move.
+Diagnosed:
+
+    corr(grid_position, result_order)  = 0.627
+    corr(quali_gap_pct, result_order)  = 0.496
+    corr(grid_position, quali_gap_pct) = 0.658
+
+`grid_position` IS the qualifying result with penalties applied, it is the
+better predictor, and the new features are 0.66-correlated with it. They are
+**substitutes, not complements**. The finding: **the MAGNITUDE of a qualifying
+gap does not predict race result beyond qualifying ORDER.**
+
+Keep the features (leakage-free, may combine with race-pace features later) but
+do not call them an improvement. `quali_stage_reached` and `quali_no_time`
+contribute 0.00% gain and are removal candidates.
+
 ### Next action
 
-**Milestone 3: qualifying and car features.** The harness and the data are now
-in place to measure a change honestly, which they were not before.
+FIX_PLAN.md nominated unused qualifying pace as the most obvious missing
+signal. It has now been added properly and is not the answer. The gap between
+the models and the grid baseline is NOT a qualifying-information gap.
 
-First and most obvious: `quali_best_s` and `gap_to_pole_s` are ingested, ~99%
-populated and NOT in `FEATURE_COLS`. For a forecast made after qualifying that
-is the single most obvious missing signal. FIX_PLAN.md section 5.B specifies
-per-segment normalisation (compare within Q1/Q2/Q3, not a raw minimum across
-them).
+What remains untried, in order of expected value:
 
-Two other things worth doing early:
+1. **Race pace.** Nothing in the feature set measures how fast a car is over a
+   stint, only where it started and where it historically finished. Practice
+   long-run stints are the natural source (FIX_PLAN.md section 5.D: robust
+   long-run lap pace, stint consistency, tyre-age slope, excluding in/out and
+   deleted laps). This needs new ingestion.
+2. **Recency-weighted car form** (section 5.C). `constructor_standing_prior` is
+   cumulative season points - lagging, badly scaled, and it omits sprint points.
+   Exponentially weighted recent team pace is the prescribed replacement.
+3. **Specialist winner/podium objectives** (section 6, M4). Every current model
+   optimises a top-10 flag or full-field order; none optimises the thing being
+   measured. The blend's alpha is still selected by Spearman.
 
-1. **Measure whether 2018-2021 helps.** It is a different era - cars, tyres,
-   points, a 17-race COVID season. FIX_PLAN.md section 5.A.4 warns older data is
-   an experiment, not automatically better. The backtest can now answer this;
-   nobody has asked it.
-2. **Alpha is still selected by Spearman** while the objective is
-   winner/podium (FIX_PLAN.md P1). The full backtest shows the blend resolving
-   as better on Spearman and top-10 while flat on winner - i.e. it is
-   succeeding at what it optimises and not at what is wanted.
-
-Housekeeping: Gate 1 prints "expect ~0.42-0.48" for the target mean where the
-true value is 0.4968. With ~20 cars exactly 10 hold `result_order <= 10` by
-construction, so ~0.50 is the ceiling; the text is stale, not the data.
+Note the backtest harness makes each of these a one-command measurement, which
+is what milestone 2 was for.
 
 ## 8. Update protocol
 

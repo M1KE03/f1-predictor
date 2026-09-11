@@ -40,10 +40,10 @@ PREFILL_NAME = "features_prefill.parquet"
 FEATURES_NAME = "features.parquet"
 FILLS_NAME = "fill_values.json"
 
-# Raw columns worth keeping alongside the matrix even though nothing models
-# them (qualifying pace is unused in v1 but 98.9% populated -- FIX_PLAN.md
-# section 2, P1, earmarks it as the first feature experiment).
-EXTRA_COLS = ("quali_best_s", "gap_to_pole_s")
+# Previously carried the raw qualifying times, which now live in ID_COLS
+# alongside the per-segment ones (increment 3.1). Keeping them here as well
+# produced duplicate columns and an unwritable parquet.
+EXTRA_COLS: tuple[str, ...] = ()
 
 
 def build(raw_path: Path = RAW_PATH, out_dir: Path = DATA_DIR) -> pd.DataFrame:

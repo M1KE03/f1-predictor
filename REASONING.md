@@ -1202,4 +1202,149 @@ failures are the winner and podium thresholds themselves.
 
 ---
 
+## [011] Add current qualifying pace -- and measure that it does not help
+
+**Date:** 2026-09-11 - **Milestone:** 3 (increment 3.1) - **Files:**
+`src/qualifying.py` (new), `src/ingest.py`, `src/columns.py`,
+`src/features.py`, `src/preprocessing.py`, `src/build_features.py`,
+`tests/test_qualifying.py` (new)
+**Status:** implemented, result NEGATIVE
+
+### Before
+
+`quali_best_s` and `gap_to_pole_s` were ingested, ~98% populated, and absent
+from `FEATURE_COLS`. FIX_PLAN.md section 2 P1 called this the first feature
+experiment to run.
+
+### After
+
+`ingest.quali_frame()` retains `q1_s` / `q2_s` / `q3_s` separately.
+`src/qualifying.py` builds seven features, all normalised WITHIN a segment.
+`FEATURE_COLS` goes 22 -> 29.
+
+### Why per-segment, not the stored minimum
+
+`quali_best_s` is the minimum across Q1/Q2/Q3, and that is not comparable
+between drivers: Q3 runs on fresher tyres, a rubbered-in track and less fuel, so
+it compares a Q1-eliminated driver's lap against another driver's Q3 lap.
+FIX_PLAN.md section 5.B says so explicitly. Every gap here is
+
+    gap_pct = 100 * (driver_time / segment_best - 1)
+
+which is also circuit-independent: 0.5% means the same at Monaco and Spa,
+where half a second does not.
+
+Missing is treated as information. A driver with no Q3 time did not reach Q3 --
+a fact about pace, not an absent measurement. Those columns are declared
+native-missing so LightGBM splits on the absence itself, and
+`assert_no_missing` gained an allow-list so an accidental NaN anywhere else
+still fails loudly.
+
+### The result: no measurable effect
+
+Same 127 races, 6 season folds, 22-feature model against 29-feature model:
+
+| method | winner | podium | top-10 | spearman |
+| --- | --- | --- | --- | --- |
+| grid_baseline | 0.5591 (control) | 0.6693 | 0.7701 | 0.6305 |
+| rank_model | 0.5591 -> 0.5591 | 0.6483 -> 0.6667 | 0.7764 -> 0.7748 | 0.6419 -> 0.6513 |
+| blend | 0.5669 -> 0.5669 | 0.6667 -> 0.6588 | 0.7843 -> 0.7756 | 0.6622 -> 0.6590 |
+
+Paired on identical races, new minus old:
+
+- blend winner **+0.0000** [-0.0394, +0.0394]
+- rank_model winner **+0.0000** [-0.0551, +0.0551]
+- rank_model podium +0.0184 [-0.0079, +0.0446], spearman +0.0094 [-0.0016,
+  +0.0202] - neither resolves
+- blend podium -0.0079 and spearman -0.0031 - slightly WORSE
+
+On 2026 specifically the blend went from 10/13 winners to 9/13.
+
+A prediction was recorded before running this: "qualifying pace features will
+improve ordering further but will not move winner accuracy by 5pp." Half right.
+Winner accuracy did not move, as predicted. Ordering did not improve either,
+which was predicted wrongly.
+
+### Why it does not help, diagnosed rather than assumed
+
+The model uses these features heavily. Ranker importance by gain:
+
+    grid_position              34.4%
+    quali_gap_to_median_pct    31.3%   <- new, second overall
+    form_avg_points_3          13.1%
+    quali_gap_pct               3.2%   <- new
+    q1_gap_pct                  2.4%   <- new
+    quali_pace_vs_teammate_pct  1.5%   <- new
+
+The seven new features take **38.6% of total gain**, more than
+`grid_position`. And yet nothing downstream changes. The correlations explain
+it:
+
+    corr(grid_position, result_order)  = 0.627
+    corr(quali_gap_pct, result_order)  = 0.496
+    corr(grid_position, quali_gap_pct) = 0.658
+
+`grid_position` IS the qualifying result, penalties already applied. It is the
+better predictor of the two, and the new features are 0.66-correlated with it.
+So they are **substitutes, not complements**: they absorb gain that
+`grid_position` would otherwise have taken, and redistribute importance without
+adding information.
+
+The substantive finding is that **the MAGNITUDE of a qualifying gap does not
+predict race result beyond qualifying ORDER**. That is plausible on reflection -
+race outcome turns on race pace, tyre degradation, strategy and reliability, not
+on how much faster one car was over a single low-fuel lap.
+
+### What this implies for the remaining plan
+
+FIX_PLAN.md section 2 P1 nominated unused qualifying pace as the single most
+obvious missing signal. It has now been added properly and it is not the answer.
+The gap between the models and the grid baseline is not a qualifying-information
+gap. What remains untried:
+
+- **Race pace**, which nothing in the feature set measures. Practice long-run
+  stints (FIX_PLAN.md section 5.D) are the natural source and are explicitly
+  sequenced after A-C for this reason.
+- **Recency-weighted car form** (section 5.C). `constructor_standing_prior` is
+  cumulative season points, which is a lagging and badly scaled proxy.
+- **Specialist winner/podium objectives** (section 6, M4). Every current model
+  optimises either a top-10 flag or full-field order; none optimises the thing
+  being measured.
+
+### Trade-offs / what this costs
+
+- **Seven features added for no measured gain.** They should not be removed
+  yet: this is one experiment on 127 races, they are genuinely leakage-free
+  pre-cutoff information, and they may matter once race-pace features give the
+  model something to combine them with. But they must not be described as an
+  improvement.
+- **Re-ingestion was required** to retain the per-segment times, so every raw
+  file was rewritten. Coverage manifests confirm all three ranges complete with
+  zero skips.
+- `quali_stage_reached` and `quali_no_time` contribute 0.00% gain - fully
+  redundant with the continuous gaps. Candidates for removal.
+- `EXTRA_COLS` in `build_features.py` had to be emptied: the raw quali columns
+  moved into `ID_COLS`, and keeping both produced duplicate columns and an
+  unwritable parquet.
+
+### Verification
+
+- 191 tests pass (18 new in `tests/test_qualifying.py`).
+- The central test constructs a session where per-segment and cross-segment
+  answers differ substantially, and asserts a Q1-eliminated driver is measured
+  against the Q1 best.
+- Teammate gaps are asserted to use the deepest SHARED segment, and to be NaN
+  when no segment is shared - comparing across segments would measure track
+  evolution rather than the drivers.
+- Scale-freedom asserted directly: a 1% deficit reads as 1.0 at both a 70s and
+  a 100s circuit.
+- Within-race-only asserted: adding a later race does not change an earlier
+  race's values.
+- Gate 2 passes on the rebuilt features; zero unexpected NaNs, 409 deliberate
+  ones across the four native-missing columns.
+- Coverage: q1 97.6%, q2 72.8%, q3 47.9% populated; 1795 rows reached Q3, which
+  is ~10 per 20-car field as expected.
+
+---
+
 <!-- Append new entries above this line, newest last. -->
