@@ -8,7 +8,17 @@ features.parquet is an identifier / label / helper and must never enter X.
 # evaluation, auditing and joins -- NOT fed to the model.
 ID_COLS = [
     "year", "round", "event_name", "circuit_id", "driver", "driver_id",
-    "team", "date", "position", "status", "is_dnf", "classified", "points",
+    "team", "date", "position", "status", "points",
+    # Separated outcome concepts (src.labels). `position` above is the same
+    # values as `result_order`; both are kept while callers migrate.
+    "result_order", "classified_position_raw", "status_category",
+    "started", "finished", "officially_classified",
+    "officially_classified_source", "is_winner", "is_podium",
+    # DEPRECATED. `classified` means only "a result place exists" and is true
+    # for 99.9% of rows -- use `officially_classified`. `is_dnf` is the
+    # complement of `finished`. Retained so unmigrated callers keep working;
+    # remove once nothing reads them.
+    "is_dnf", "classified",
     # helper kept for the fill policy + audit (spec 2.2 computes it as an
     # intermediate; spec 3 deliberately excludes it from FEATURE_COLS)
     "driver_overall_avg_finish",

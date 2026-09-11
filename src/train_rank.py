@@ -8,11 +8,14 @@ directly, which is what "predict the finishing order / podium" actually
 needs. Same leakage-safe features as the classifier (FEATURE_COLS, audited
 by src.audit_leakage); only the label, objective, and grouping differ.
 
-Label (relevance, higher = finished better): classified drivers get
-(field_size - position + 1); DNFs / unclassified get 0 (worst relevance in
-their race). Groups = one race each, sizes passed to LightGBM in row order.
+Label (relevance, higher = finished better): officially classified drivers get
+(field_size - result_order + 1); drivers who never started, were disqualified
+or withdrew get 0. Groups = one race each, sizes passed to LightGBM in row
+order.
 
-Run: python -m src.train_rank
+Run:
+    python -m src.train_rank                      # writes models/
+    python -m src.train_rank --models-dir models/v2
 """
 import json
 import logging
@@ -24,6 +27,7 @@ import lightgbm as lgb
 import pandas as pd
 
 from .columns import FEATURE_COLS
+from .metrics import ensure_labels
 from .train import chronological_split
 
 log = logging.getLogger("train_rank")
@@ -51,12 +55,26 @@ PARAMS = dict(
 
 
 def add_relevance_label(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
+    """Relevance = better official finish scores higher; ineligible rows get 0.
+
+    Eligibility is `officially_classified`, not the deprecated `classified`
+    flag. The two differ for exactly the rows that should score 0: drivers who
+    never started, were disqualified, or withdrew. A retirement that still
+    holds a place in the published classification keeps its real relevance,
+    per FIX_PLAN.md section 4 -- retirements are not collapsed to last.
+
+    NOTE the grade scheme itself is unchanged: relevance is still
+    `field_size - result_order + 1`, so it depends on field size and, under
+    LightGBM's exponential default `label_gain`, weights P1 enormously more
+    than P2. FIX_PLAN.md section 6 proposes a bounded grade scheme as an
+    experiment; that is a modelling change and is deliberately not made here.
+    """
+    df = ensure_labels(df).copy()
     field_size = df.groupby(["year", "round"])["driver"].transform("size")
     df["relevance"] = 0
-    classified = df["classified"] == 1
-    df.loc[classified, "relevance"] = (field_size - df["position"] + 1).clip(lower=0)
-    df["relevance"] = df["relevance"].astype(int)
+    eligible = df["officially_classified"] == 1
+    df.loc[eligible, "relevance"] = (field_size - df["result_order"] + 1).clip(lower=0)
+    df["relevance"] = df["relevance"].fillna(0).astype(int)
     return df
 
 
@@ -68,6 +86,15 @@ def group_sizes(df: pd.DataFrame) -> list[int]:
 
 
 def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--models-dir", type=Path, default=MODELS_DIR,
+                        help="where to write the ranker (default: models/). Use a "
+                             "separate directory to keep a frozen model for A/B.")
+    args = parser.parse_args()
+    models_dir = args.models_dir
+
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
     df = pd.read_parquet(DATA_DIR / "features.parquet")
@@ -91,13 +118,13 @@ def main():
     log.info("Best iteration: %s", ranker.best_iteration_)
     log.info("Best val scores: %s", dict(ranker.best_score_.get("valid_0", {})))
 
-    MODELS_DIR.mkdir(exist_ok=True)
-    joblib.dump(ranker, MODELS_DIR / "rank_model.joblib")
-    with open(MODELS_DIR / "feature_cols.json", "w") as f:
+    models_dir.mkdir(parents=True, exist_ok=True)
+    joblib.dump(ranker, models_dir / "rank_model.joblib")
+    with open(models_dir / "feature_cols.json", "w") as f:
         json.dump(FEATURE_COLS, f, indent=2)
-    shutil.copy(DATA_DIR / "fill_values.json", MODELS_DIR / "fill_values.json")
+    shutil.copy(DATA_DIR / "fill_values.json", models_dir / "fill_values.json")
 
-    log.info("Saved rank_model.joblib -> %s", MODELS_DIR)
+    log.info("Saved rank_model.joblib -> %s", models_dir)
     print("\nNext: python -m src.evaluate_rank   (order/podium metrics vs grid baseline)")
 
 

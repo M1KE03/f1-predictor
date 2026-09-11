@@ -477,4 +477,98 @@ the shared deterministic ranker.
 
 ---
 
+## [005] Ranker relevance off the deprecated `classified` gate
+
+**Date:** 2026-09-11 - **Milestone:** 1 (increment 1.3) - **Files:**
+`src/train_rank.py`, `src/columns.py`, `src/evaluate_rank.py`,
+`tests/test_train_rank.py` (new), `models/v2/` (new artifacts)
+**Status:** implemented
+
+### Before
+
+```python
+classified = df["classified"] == 1
+df.loc[classified, "relevance"] = (field_size - df["position"] + 1).clip(lower=0)
+```
+
+Because `classified` is true for 99.9% of rows, drivers who never started or
+were disqualified received relevance based on wherever the classification
+happened to list them. The module docstring claimed DNFs received zero
+relevance; 303 of 305 retirements did not.
+
+### After
+
+Eligibility is `officially_classified`. Non-starters, disqualifications and
+withdrawals score 0; a retirement that still holds a place in the published
+classification keeps its real relevance. `columns.py` ID_COLS carries the
+separated label fields and marks `classified` / `is_dnf` deprecated in place.
+`train_rank.py` and `evaluate_rank.py` both take `--models-dir`, so a retrain
+can be written alongside the frozen artifacts instead of over them.
+
+### Why
+
+- **The label contradicted its own documentation.** Whatever the right grade
+  scheme turns out to be, a driver who did not start the race cannot be
+  evidence about finishing order. Training on that teaches the ranker to
+  predict positions for cars that were never on track.
+- **Retirements keep their places deliberately** (FIX_PLAN.md section 4). The
+  tempting alternative - collapse every retirement to last - would discard the
+  source's real ordering information and is explicitly warned against.
+- **The grade scheme was left alone on purpose.** Relevance is still
+  `field_size - result_order + 1`, which is field-size dependent and, under
+  LightGBM's exponential default `label_gain`, weights P1 far above P2.
+  FIX_PLAN.md section 6 proposes a bounded scheme, but calls it a proposed
+  experiment rather than a proven setting. Changing eligibility and grades in
+  one step would have made the result impossible to attribute.
+- **A separate model directory keeps the A/B honest.** `rank_model.joblib` is
+  hashed in `reports/baseline.json`; overwriting it would have left no way to
+  compare against the frozen artifact.
+
+### Trade-offs / what this costs
+
+- **This fix changes nothing measurable on the current dataset.** Only 27 of
+  2080 rows change relevance, 11 of them in the training partition. The
+  retrained ranker differs from the frozen one by a maximum of 1.8e-07 in
+  predicted score - about 1.2e-07 of the score range - and not one driver's
+  predicted position moves. Every headline metric is identical to four decimal
+  places. The honest summary is that this closes a semantic hole, not a
+  performance gap. It should matter more once 2018-2021 is re-ingested, where
+  DNS and DSQ rows are more numerous.
+- **`models/v2/` is path sprawl** pending the artifact restructure in
+  FIX_PLAN.md section 5.A.1. It is not a versioning scheme, just somewhere safe
+  to write while the baseline stays frozen.
+- **v2 should not be promoted on performance grounds** - there is no
+  difference to promote on. It is the correct code path, not a better model.
+- `columns.py` still lists `classified` and `is_dnf`. Removing them is a
+  breaking change for anything reading `features.parquet` directly, and the
+  stored artifact still has those columns.
+
+### Verification
+
+- 79 tests pass (9 new in `tests/test_train_rank.py`), including a regression
+  guard asserting that DSQ and DNS rows scored non-zero under the legacy gate
+  and score zero now, while all seven classified drivers are unaffected.
+- Impact measured before implementing: 27 of 2080 rows change relevance
+  (16 did_not_start, 10 disqualified, 1 withdrawn); train 11, val 9, test 7.
+- A/B on the held-out 2026 season, v1 vs v2: winner 0.5455 both, podium 0.5758
+  both, top-10 0.6909 both, spearman_all 0.5329 both, spearman_finishers 0.7179
+  both. Blend metrics identical too. Zero drivers change predicted position.
+- Both models stop at iteration 20. Their serialised structures differ, so the
+  retrain is real; the numerical effect is simply negligible.
+- `models/rank_model.joblib` still matches its frozen hash, and every artifact
+  recorded in `reports/baseline.json` is intact.
+- `python -m src.baseline` still reports "NONE (metrics identical)".
+
+### Not done in this increment
+
+- The bounded grade-scheme experiment (FIX_PLAN.md section 6) and the
+  field-size dependence of relevance.
+- `blend_rank.py` and `predict.py` still load from `models/` with no
+  `--models-dir`, so v2 is reachable only from `train_rank` and
+  `evaluate_rank`. Wiring the rest belongs with the model-bundle work in
+  milestone 5, which replaces ad-hoc directories with a real bundle.
+- Removing the deprecated `classified` / `is_dnf` columns.
+
+---
+
 <!-- Append new entries above this line, newest last. -->

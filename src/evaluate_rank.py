@@ -41,9 +41,17 @@ def order_metrics(test: pd.DataFrame, score_col: str, ascending: bool) -> dict:
 
 
 def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--models-dir", type=Path, default=MODELS_DIR,
+                        help="directory holding rank_model.joblib (default: models/)")
+    args = parser.parse_args()
+
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
-    ranker = joblib.load(MODELS_DIR / "rank_model.joblib")
+    log.info("Ranker: %s", args.models_dir / "rank_model.joblib")
+    ranker = joblib.load(args.models_dir / "rank_model.joblib")
     df = pd.read_parquet(DATA_DIR / "features.parquet")
     latest = int(df["year"].max())
     test = df[df["year"] == latest].copy()
