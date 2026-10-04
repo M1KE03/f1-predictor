@@ -1,195 +1,203 @@
-# Prediction log book
+# 2026 Prediction Log
 
-A race-by-race record of what the model forecast **before lights-out** and what
-actually happened. One entry per race weekend, newest first.
+## Season
 
-**Why this file exists.** `FIX_PLAN.md` §8.6 makes the point that a backtest you
-have looked at repeatedly is development evidence, not proof. Only forecasts
-frozen *before* their outcomes validate the pipeline prospectively. This is the
-human-readable half of that record; `reports/forecasts/*.json` is the machine
-half.
+| Rd | Grand Prix | Date | Pick | Winner | Winner (model / grid) | Podium (model · grid) | Top 10 (model · grid) |
+| :---: | --- | --- | :---: | :---: | :---: | :---: | :---: |
+| 14 | Spanish GP (Madrid) ⚠️ | 13 Sep | ANT | ANT | ✅ / ❌ | 3/3 · 3/3 | 9/10 · 9/10 |
+| 15 | Azerbaijan GP (Baku) ⚠️ | 26 Sep | LEC | RUS | ❌ / ✅ | 1/3 · 1/3 | 7/10 · 6/10 |
+| 16 | Bahrain GP (Kuala Lumpur) ⚠️ | 04 Oct | HAM | | | | |
+| 17 | Singapore GP (Marina Bay) | 11 Oct | | | | | |
+| 18 | United States GP (Austin) | 25 Oct | | | | | |
+| 19 | Mexico City GP (Mexico City) | 01 Nov | | | | | |
+| 20 | São Paulo GP (São Paulo) | 08 Nov | | | | | |
+| 21 | Las Vegas GP (Las Vegas) | 21 Nov | | | | | |
+| 22 | Qatar GP (Lusail) | 29 Nov | | | | | |
+| 23 | Abu Dhabi GP (Yas Marina) | 06 Dec | | | | | |
+| | **Total** | | | | **1/2 · 1/2** | **4/6 · 4/6** | **16/20 · 15/20** |
 
-> **Note on tracking.** `.gitignore` excludes `reports/*` and re-includes only
-> `reports/baseline.json`, so the archived forecast JSONs are **not** in git
-> today. Until that is changed, this file is the only version-controlled copy of
-> the prospective record. See [Open items](#open-items).
-
----
-
-## Weekly routine
-
-1. **After qualifying, before the race** — archive the forecast:
-   ```bash
-   python -m src.predict --year 2026 --round <N> --from-quali --archive
-   ```
-   `--from-quali` matters. Against an assumed grid the measured cost over 61
-   races is winner accuracy 0.5902 → 0.2787 and podium overlap 0.6831 → 0.4809.
-   Never log an assumed-grid forecast as if it were a real one.
-2. **Add an entry below** from the archived JSON, leaving `Actual` and `Δ` blank.
-3. **After the race** — fill in `Actual` / `Δ`, complete the scorecard, and
-   update the [season tally](#season-tally-2026).
-4. **Once results are ingested** — get the machine-scored version:
-   ```bash
-   python -m src.ingest --start-year 2026 --end-year 2026 --out data/v2/raw_2026.parquet
-   python -m src.score_forecasts
-   ```
-
-### Scorecard definitions
-
-| Metric | Meaning |
-| --- | --- |
-| **Winner hit** | Did `pred_finish_rank == 1` win? (yes / no) |
-| **Podium overlap** | How many of the 3 predicted podium drivers finished top 3, out of 3 |
-| **Top-10 overlap** | How many of the 10 predicted top-10 drivers finished top 10, out of 10 |
-| **Grid comparison** | Same three numbers for "just sort by the starting grid" — the baseline that actually has to be beaten |
-| **Favourite's p_win** | The model's stated probability for its own top pick, for calibration tracking |
-
-The grid comparison is the whole point. The champion's *order* is roughly
-grid-equivalent; its *probabilities* are what beat the baseline. An entry
-without the grid column cannot tell you whether the model added anything.
+⚠️ forecast made after race start
 
 ---
 
-## Season tally 2026
+## Round 16 · Bahrain Grand Prix (Kuala Lumpur)
 
-| Round | Race | Model winner | Grid winner | Model podium | Grid podium | Model top-10 | Grid top-10 |
-| ---: | --- | :---: | :---: | ---: | ---: | ---: | ---: |
-| 14 | Spanish GP (Madrid) | _pending_ | _pending_ | _/3 | _/3 | _/10 | _/10 |
-| | **Season** | **0/0** | **0/0** | **0/0** | **0/0** | **0/0** | **0/0** |
+04 Oct 2026 · grid provisional · ⚠️ forecast made after race start
 
-Reference points from the 127-race backtest — what "normal" looks like:
+### Prediction
 
-| Method | Winner | Podium | Top-10 |
-| --- | ---: | ---: | ---: |
-| Starting grid | 0.5591 | 0.6693 | 0.7701 |
-| Ranker (champion) | 0.6063 | 0.6719 | 0.7811 |
+| | Driver | Team | Grid | Win | Podium | Top 10 |
+| :---: | --- | --- | :---: | ---: | ---: | ---: |
+| 🥇 | **HAM** | Ferrari | P2 | 31.8% | 77.6% | 100% |
+| 🥈 | **VER** | Red Bull | P1 | 24.0% | 68.9% | >99.9% |
+| 🥉 | **HAD** | Red Bull | P3 | 17.8% | 57.2% | >99.9% |
+| 4 | ANT | Mercedes | P4 | 14.9% | 49.7% | 99.9% |
+| 5 | LEC | Ferrari | P5 | 2.8% | 11.3% | 88.8% |
+| 6 | NOR | McLaren | P6 | 1.9% | 7.8% | 78.6% |
+| 7 | PIA | McLaren | P7 | 1.3% | 5.4% | 66.7% |
+| 8 | RUS | Mercedes | P8 | 1.1% | 4.4% | 60.1% |
+| 9 | LAW | Racing Bulls | P11 | 0.6% | 2.2% | 36.8% |
+| 10 | GAS | Alpine | P9 | 0.5% | 2.0% | 33.5% |
+| 11 | BOR | Audi | P10 | 0.5% | 1.8% | 31.1% |
+| 12 | ALO | Aston Martin | P12 | 0.3% | 1.2% | 20.9% |
+| 13 | SAI | Williams | P13 | 0.3% | 1.0% | 18.3% |
+| 14 | LIN | Racing Bulls | P16 | 0.3% | 1.3% | 20.1% |
+| 15 | ALB | Williams | P20 | 0.3% | 1.0% | 18.6% |
+| 16 | STR | Aston Martin | P14 | 0.3% | 1.1% | 18.2% |
+| 17 | BOT | Cadillac | P21 | 0.3% | 1.0% | 18.3% |
+| 18 | COL | Alpine | P15 | 0.3% | 1.0% | 18.1% |
+| 19 | PER | Cadillac | P22 | 0.3% | 1.1% | 18.5% |
+| 20 | HUL | Audi | P17 | 0.3% | 1.0% | 17.8% |
+| 21 | BEA | Haas | P18 | 0.3% | 0.9% | 17.8% |
+| 22 | OCO | Haas | P19 | 0.3% | 1.0% | 17.9% |
 
-A handful of races is far too small a sample to conclude anything against those.
-Log the numbers; resist reading a trend into them before ~20 races.
+### Result
 
----
-
-## Entries
-
-### 2026 Round 14 — Spanish Grand Prix (Madrid) — 2026-09-13
-
-| Field | Value |
-| --- | --- |
-| Forecast made (UTC) | 2026-09-13T13:09:37 |
-| Grid status | **PROVISIONAL** — 2026 R14 qualifying session |
-| Field size | 22 (0 pit start(s)) |
-| Bundle | trained on 186 races to 2026-09-06, T=0.344, alpha=0.3 |
-| Bundle fingerprint | code `fe6e7fa7d6e4` · data `6ddcffdd865c` |
-| Archived record | `reports/forecasts/2026-14.json` |
-
-**Headline call:** ANT P1 (27.3% win) · NOR P2 (24.2% win) · VER P3 (21.7% win)
-
-#### Prediction vs result
-
-| Pred | Driver | Team | Grid | p_win | p_podium | p_top10 | **Actual** | **Δ** |
-| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | ANT | mercedes | 2 | 27.3% | 71.2% | >99.9% |  |  |
-| 2 | NOR | mclaren | 1 | 24.2% | 67.2% | >99.9% |  |  |
-| 3 | VER | red_bull | 3 | 21.7% | 62.7% | >99.9% |  |  |
-| 4 | HAM | ferrari | 4 | 10.8% | 37.0% | 99.6% |  |  |
-| 5 | LEC | ferrari | 5 | 4.3% | 16.6% | 93.6% |  |  |
-| 6 | RUS | mercedes | 6 | 3.7% | 14.2% | 90.7% |  |  |
-| 7 | PIA | mclaren | 7 | 2.0% | 7.5% | 74.9% |  |  |
-| 8 | LAW | red_bull | 8 | 1.4% | 5.4% | 62.7% |  |  |
-| 9 | LIN | racing_bulls | 10 | 0.7% | 2.6% | 39.3% |  |  |
-| 10 | COL | alpine | 9 | 0.5% | 2.1% | 31.4% |  |  |
-| 11 | HUL | sauber | 11 | 0.4% | 1.8% | 26.5% |  |  |
-| 12 | BOR | sauber | 12 | 0.4% | 1.6% | 23.5% |  |  |
-| 13 | SAI | williams | 17 | 0.3% | 1.1% | 16.7% |  |  |
-| 14 | OCO | haas | 13 | 0.3% | 1.0% | 16.5% |  |  |
-| 15 | ALB | williams | 16 | 0.3% | 1.2% | 15.7% |  |  |
-| 16 | STR | aston_martin | 22 | 0.3% | 1.1% | 16.8% |  |  |
-| 17 | PER | cadillac | 19 | 0.3% | 1.0% | 15.9% |  |  |
-| 18 | BOT | cadillac | 20 | 0.3% | 1.0% | 15.9% |  |  |
-| 19 | ALO | aston_martin | 18 | 0.2% | 0.9% | 15.2% |  |  |
-| 20 | TSU | racing_bulls | 15 | 0.2% | 0.9% | 15.2% |  |  |
-| 21 | GAS | alpine | 14 | 0.2% | 1.0% | 14.7% |  |  |
-| 22 | BEA | haas | 21 | 0.2% | 1.1% | 15.4% |  |  |
-
-_Fill **Actual** with the classified finishing position (`DNF` if retired) and **Δ** with actual − predicted._
-
-#### Scorecard — fill after the race
-
-| Metric | Model | Grid baseline |
-| --- | --- | --- |
-| Winner hit | _pending_ | _pending_ |
-| Podium overlap | _ / 3 | _ / 3 |
-| Top-10 overlap | _ / 10 | _ / 10 |
-| Favourite's p_win | 27.3% (ANT) | — |
-| Actual winner | _pending_ | |
-| Actual podium | _pending_ | |
-
-#### Notes
-
-- **This is Madrid, not Barcelona.** In 2026 the *Spanish Grand Prix* runs at the
-  Madring; Barcelona is a separate event that was round 7 on 2026-06-14. If you
-  came here looking for Barcelona, that race is already in the dataset.
-- **Grid is PROVISIONAL,** derived from the qualifying session. Penalties applied
-  after qualifying are not reflected. If the published starting grid differs,
-  the forecast was made against the wrong grid — record that here rather than
-  quietly re-running it.
-- **The model disagrees with pole.** It puts ANT (P2 on the grid) ahead of NOR
-  (pole), and the top three are unusually tight: 27.3% / 24.2% / 21.7%. That is
-  close to a three-way coin toss, and the honest reading is that this race has
-  no strong favourite rather than that ANT is backed with conviction.
-- **A superseded forecast exists.** An earlier assumed-grid forecast for this
-  round, made 2026-09-11 before qualifying, is preserved at
-  `reports/forecasts/superseded/2026-14.assumed-grid.json`. It is out of the
-  scorer's non-recursive glob deliberately, so it cannot contaminate the
-  prospective record. It called ANT / HAM / LEC and had a different roster
-  (HAD rather than TSU at Racing Bulls), which is a fair illustration of why
-  assumed grids are not worth scoring.
+| Pos | Driver | Team | Grid | Predicted | Δ |
+| :---: | --- | --- | :---: | :---: | :---: |
+| 1 | | | | | |
+| 2 | | | | | |
+| 3 | | | | | |
+| 4 | | | | | |
+| 5 | | | | | |
+| 6 | | | | | |
+| 7 | | | | | |
+| 8 | | | | | |
+| 9 | | | | | |
+| 10 | | | | | |
+| 11 | | | | | |
+| 12 | | | | | |
+| 13 | | | | | |
+| 14 | | | | | |
+| 15 | | | | | |
+| 16 | | | | | |
+| 17 | | | | | |
+| 18 | | | | | |
+| 19 | | | | | |
+| 20 | | | | | |
+| 21 | | | | | |
+| 22 | | | | | |
 
 ---
 
-## Entry template
+## Round 15 · Azerbaijan Grand Prix (Baku)
 
-Copy this block for each new race.
+26 Sep 2026 · grid provisional · ⚠️ forecast made after race start
 
-```markdown
-### YYYY Round N — Race Name (Circuit) — YYYY-MM-DD
+### Prediction
 
-| Field | Value |
-| --- | --- |
-| Forecast made (UTC) | |
-| Grid status | |
-| Field size | |
-| Bundle | |
-| Bundle fingerprint | |
-| Archived record | `reports/forecasts/YYYY-NN.json` |
+| | Driver | Team | Grid | Win | Podium | Top 10 |
+| :---: | --- | --- | :---: | ---: | ---: | ---: |
+| 🥇 | **LEC** | Ferrari | P2 | 35.9% | 82.5% | 100% |
+| 🥈 | **RUS** | Mercedes | P1 | 22.0% | 67.1% | >99.9% |
+| 🥉 | **PIA** | McLaren | P3 | 18.0% | 59.0% | >99.9% |
+| 4 | HAD | Red Bull | P4 | 13.9% | 48.8% | >99.9% |
+| 5 | NOR | McLaren | P5 | 2.7% | 11.3% | 91.7% |
+| 6 | HAM | Ferrari | P6 | 1.9% | 7.9% | 83.1% |
+| 7 | VER | Red Bull | P8 | 1.2% | 5.0% | 69.2% |
+| 8 | GAS | Alpine | P7 | 0.4% | 1.8% | 33.4% |
+| 9 | SAI | Williams | P9 | 0.4% | 1.6% | 30.0% |
+| 10 | ANT | Mercedes | P16 | 0.8% | 3.3% | 53.6% |
+| 11 | COL | Alpine | P10 | 0.3% | 1.2% | 24.6% |
+| 12 | BEA | Haas | P11 | 0.3% | 1.2% | 24.2% |
+| 13 | LAW | Racing Bulls | P12 | 0.3% | 1.1% | 22.5% |
+| 14 | LIN | Racing Bulls | P15 | 0.3% | 1.1% | 23.2% |
+| 15 | OCO | Haas | P14 | 0.2% | 1.0% | 18.9% |
+| 16 | BOR | Audi | P17 | 0.2% | 1.0% | 19.2% |
+| 17 | ALB | Williams | P13 | 0.2% | 0.8% | 17.6% |
+| 18 | HUL | Audi | P18 | 0.2% | 0.8% | 17.8% |
+| 19 | ALO | Aston Martin | P19 | 0.2% | 0.8% | 17.7% |
+| 20 | PER | Cadillac | P20 | 0.2% | 0.9% | 18.0% |
+| 21 | STR | Aston Martin | P21 | 0.2% | 0.8% | 17.8% |
+| 22 | BOT | Cadillac | P22 | 0.2% | 0.9% | 17.5% |
 
-**Headline call:**
+### Result
 
-#### Prediction vs result
-
-| Pred | Driver | Team | Grid | p_win | p_podium | p_top10 | **Actual** | **Δ** |
-| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-
-#### Scorecard — fill after the race
-
-| Metric | Model | Grid baseline |
-| --- | --- | --- |
-| Winner hit | | |
-| Podium overlap | _ / 3 | _ / 3 |
-| Top-10 overlap | _ / 10 | _ / 10 |
-| Favourite's p_win | | — |
-| Actual winner | | |
-| Actual podium | | |
-
-#### Notes
-```
+| Pos | Driver | Team | Grid | Predicted | Δ |
+| :---: | --- | --- | :---: | :---: | :---: |
+| 1 | RUS | Mercedes | P1 | P2 | ▲1 |
+| 2 | VER | Red Bull | P8 | P7 | ▲5 |
+| 3 | HAD | Red Bull | P4 | P4 | ▲1 |
+| 4 | LEC | Ferrari | P2 | P1 | ▼3 |
+| 5 | ANT | Mercedes | P16 | P10 | ▲5 |
+| 6 | HAM | Ferrari | P6 | P6 | = |
+| 7 | LIN | Racing Bulls | P15 | P14 | ▲7 |
+| 8 | OCO | Haas | P13 | P15 | ▲7 |
+| 9 | BEA | Haas | P10 | P12 | ▲3 |
+| 10 | SAI | Williams | P14 | P9 | ▼1 |
+| 11 | HUL | Audi | P18 | P18 | ▲7 |
+| 12 | LAW | Racing Bulls | P11 | P13 | ▲1 |
+| 13 | PIA | McLaren | P3 | P3 | ▼10 |
+| 14 | PER | Cadillac | P20 | P20 | ▲6 |
+| 15 | BOR | Audi | P17 | P16 | ▲1 |
+| 16 | BOT | Cadillac | P19 | P22 | ▲6 |
+| DNF | COL | Alpine | P9 | P11 |  |
+| DNF | GAS | Alpine | P7 | P8 |  |
+| DNF | NOR | McLaren | P5 | P5 |  |
+| DNF | ALB | Williams | P12 | P17 |  |
+| DNF | ALO | Aston Martin | P21 | P19 |  |
+| DNF | STR | Aston Martin | P22 | P21 |  |
 
 ---
 
-## Open items
+## Round 14 · Spanish Grand Prix (Madrid)
 
-- [ ] **Track the forecast records in git.** `.gitignore` re-includes only
-      `reports/baseline.json`, so `reports/forecasts/*.json` is untracked despite
-      the file's own comment saying the JSON provenance records should be kept.
-      One line fixes it: `!reports/forecasts/` plus `!reports/forecasts/*.json`.
-- [ ] **Score round 14** once 2026 results are ingested (`src.score_forecasts`).
+13 Sep 2026 · grid provisional · ⚠️ forecast made after race start
+
+### Prediction
+
+| | Driver | Team | Grid | Win | Podium | Top 10 |
+| :---: | --- | --- | :---: | ---: | ---: | ---: |
+| 🥇 | **ANT** | Mercedes | P2 | 27.3% | 71.2% | >99.9% |
+| 🥈 | **NOR** | McLaren | P1 | 24.2% | 67.2% | >99.9% |
+| 🥉 | **VER** | Red Bull | P3 | 21.7% | 62.7% | >99.9% |
+| 4 | HAM | Ferrari | P4 | 10.8% | 37.0% | 99.6% |
+| 5 | LEC | Ferrari | P5 | 4.3% | 16.6% | 93.6% |
+| 6 | RUS | Mercedes | P6 | 3.7% | 14.2% | 90.7% |
+| 7 | PIA | McLaren | P7 | 2.0% | 7.5% | 74.9% |
+| 8 | LAW | Red Bull | P8 | 1.4% | 5.4% | 62.7% |
+| 9 | LIN | Racing Bulls | P10 | 0.7% | 2.6% | 39.3% |
+| 10 | COL | Alpine | P9 | 0.5% | 2.1% | 31.4% |
+| 11 | HUL | Audi | P11 | 0.4% | 1.8% | 26.5% |
+| 12 | BOR | Audi | P12 | 0.4% | 1.6% | 23.5% |
+| 13 | SAI | Williams | P17 | 0.3% | 1.1% | 16.7% |
+| 14 | OCO | Haas | P13 | 0.3% | 1.0% | 16.5% |
+| 15 | ALB | Williams | P16 | 0.3% | 1.2% | 15.7% |
+| 16 | STR | Aston Martin | P22 | 0.3% | 1.1% | 16.8% |
+| 17 | PER | Cadillac | P19 | 0.3% | 1.0% | 15.9% |
+| 18 | BOT | Cadillac | P20 | 0.3% | 1.0% | 15.9% |
+| 19 | ALO | Aston Martin | P18 | 0.2% | 0.9% | 15.2% |
+| 20 | TSU | Racing Bulls | P15 | 0.2% | 0.9% | 15.2% |
+| 21 | GAS | Alpine | P14 | 0.2% | 1.0% | 14.7% |
+| 22 | BEA | Haas | P21 | 0.2% | 1.1% | 15.4% |
+
+### Result
+
+| Pos | Driver | Team | Grid | Predicted | Δ |
+| :---: | --- | --- | :---: | :---: | :---: |
+| 1 | ANT | Mercedes | P2 | P1 | = |
+| 2 | VER | Red Bull | P3 | P3 | ▲1 |
+| 3 | NOR | McLaren | P1 | P2 | ▼1 |
+| 4 | LEC | Ferrari | P5 | P5 | ▲1 |
+| 5 | RUS | Mercedes | P6 | P6 | ▲1 |
+| 6 | LAW | Red Bull | P8 | P8 | ▲2 |
+| 7 | COL | Alpine | P9 | P10 | ▲3 |
+| 8 | PIA | McLaren | P7 | P7 | ▼1 |
+| 9 | LIN | Racing Bulls | P10 | P9 | = |
+| 10 | HUL | Audi | P11 | P11 | ▲1 |
+| 11 | OCO | Haas | P13 | P14 | ▲3 |
+| 12 | GAS | Alpine | P14 | P21 | ▲9 |
+| 13 | BOR | Audi | P12 | P12 | ▼1 |
+| 14 | TSU | Racing Bulls | P15 | P20 | ▲6 |
+| 15 | ALB | Williams | P16 | P15 | = |
+| 16 | BEA | Haas | P22 | P22 | ▲6 |
+| 17 | ALO | Aston Martin | P17 | P19 | ▲2 |
+| 18 | BOT | Cadillac | P19 | P18 | = |
+| DNF | SAI | Williams | P20 | P13 |  |
+| DNF | PER | Cadillac | P18 | P17 |  |
+| DNF | STR | Aston Martin | P21 | P16 |  |
+| DNF | HAM | Ferrari | P4 | P4 |  |
+
+---
+
+<sub>Generated by `python -m src.render_log` — do not edit by hand. Archived forecasts: `reports/forecasts/`. Detailed notes: `PREDICTIONS_NOTES.md`.</sub>

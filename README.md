@@ -266,6 +266,7 @@ Build the deployable bundle and forecast a race:
 python -m src.build_bundle                                       # -> models/champion
 python -m src.predict --year 2026 --round 14 --from-quali --archive
 python -m src.score_forecasts                                    # once results are ingested
+python -m src.render_log                                         # regenerate PREDICTIONS_LOG.md
 ```
 
 `--archive` writes an immutable record to `reports/forecasts/` binding the
@@ -332,6 +333,7 @@ comparable** to the corrected pipeline, which runs on 186 races.
 | `gates.py` | Promotion gates and paired bootstrap intervals |
 | `bundle.py`, `build_bundle.py` | Immutable model bundles; cutoff enforcement |
 | `score_forecasts.py` | Scores archived pre-race forecasts once results arrive |
+| `render_log.py` | Generates `PREDICTIONS_LOG.md`: prediction board + result table per race |
 | `weather.py`, `circuit.py`, `teammate.py` | Feature families |
 | `ingest.py`, `merge_raw.py` | FastF1 → raw parquet, team canonicalisation, Gate 1, coverage checks |
 | `audit_leakage.py` | Gate 2 — independent naive recomputation |
