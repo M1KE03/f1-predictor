@@ -56,8 +56,9 @@ without the grid column cannot tell you whether the model added anything.
 | ---: | --- | :---: | :---: | ---: | ---: | ---: | ---: |
 | 14 | Spanish GP (Madrid) | ✓ | ✗ | 3/3 | 3/3 | 9/10 | 9/10 |
 | 15 | Azerbaijan GP (Baku) | ✗ | ✓ | 1/3 | 1/3 | 7/10 | 6/10 |
-| 16 | Bahrain GP (Kuala Lumpur) | _pending_ | _pending_ | _/3 | _/3 | _/10 | _/10 |
-| | **Season (scored: 2)** | **1/2** | **1/2** | **4/6** | **4/6** | **16/20** | **15/20** |
+| 16 | Bahrain GP (Kuala Lumpur) | ✗ | ✓ | 2/3 | 2/3 | 8/10 | 7/10 |
+| 17 | Singapore GP (Marina Bay) | _pending_ | _pending_ | _/3 | _/3 | _/10 | _/10 |
+| | **Season (scored: 3)** | **1/3** | **2/3** | **6/9** | **6/9** | **24/30** | **22/30** |
 
 **Prospective only:** none yet. All three forecasts were made after lights-out:
 round 14 at 13:09 UTC against a 13:00 UTC start (9 minutes late, missed when
@@ -77,6 +78,67 @@ Log the numbers; resist reading a trend into them before ~20 races.
 ---
 
 ## Entries
+
+### 2026 Round 17 — Singapore Grand Prix (Marina Bay) — 2026-10-11
+
+| Field | Value |
+| --- | --- |
+| Forecast made (UTC) | 2026-10-11T10:28:29 |
+| Grid status | **PROVISIONAL** — 2026 R17 qualifying session |
+| Field size | 22 (0 pit start(s)) |
+| Bundle | trained on 188 races to 2026-09-26, T=0.169, alpha=0.3 |
+| Bundle fingerprint | code `a7366603c19e` · data `6b0be9b95e64` |
+| Archived record | `reports/forecasts/2026-17.json` |
+
+**Headline call:** HAM P1 (28.7% win) · LEC P2 (24.9% win) · VER P3 (21.4% win)
+
+**Prospective:** made about 1h30m before the scheduled 12:00 UTC start. This is
+the first forecast in the log frozen before lights-out.
+
+#### Prediction vs result
+
+| Pred | Driver | Team | Grid | p_win | p_podium | p_top10 | **Actual** | **Δ** |
+| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | HAM | ferrari | 3 | 28.7% | 74.4% | 100.0% |  |  |
+| 2 | LEC | ferrari | 2 | 24.9% | 69.8% | 100.0% |  |  |
+| 3 | VER | red_bull | 1 | 21.4% | 64.7% | >99.9% |  |  |
+| 4 | ANT | mercedes | 4 | 14.3% | 48.0% | >99.9% |  |  |
+| 5 | NOR | mclaren | 5 | 2.6% | 10.4% | 87.5% |  |  |
+| 6 | PIA | mclaren | 7 | 1.3% | 5.1% | 66.4% |  |  |
+| 7 | RUS | mercedes | 6 | 1.2% | 5.0% | 64.3% |  |  |
+| 8 | GAS | alpine | 8 | 0.9% | 3.7% | 54.3% |  |  |
+| 9 | LIN | racing_bulls | 10 | 0.6% | 2.2% | 39.2% |  |  |
+| 10 | LAW | racing_bulls | 9 | 0.5% | 2.2% | 36.4% |  |  |
+| 11 | HUL | sauber | 11 | 0.4% | 1.8% | 30.6% |  |  |
+| 12 | BEA | haas | 12 | 0.3% | 1.2% | 20.7% |  |  |
+| 13 | HAD | red_bull | 22 | 0.6% | 2.5% | 39.2% |  |  |
+| 14 | SAI | williams | 14 | 0.2% | 1.1% | 18.3% |  |  |
+| 15 | ALB | williams | 18 | 0.2% | 0.9% | 18.1% |  |  |
+| 16 | BOR | sauber | 15 | 0.2% | 0.9% | 18.1% |  |  |
+| 17 | OCO | haas | 13 | 0.2% | 1.0% | 17.6% |  |  |
+| 18 | PER | cadillac | 20 | 0.2% | 1.0% | 18.5% |  |  |
+| 19 | BOT | cadillac | 21 | 0.2% | 0.9% | 18.2% |  |  |
+| 20 | COL | alpine | 16 | 0.2% | 1.1% | 17.6% |  |  |
+| 21 | ALO | aston_martin | 17 | 0.2% | 1.0% | 17.6% |  |  |
+| 22 | STR | aston_martin | 19 | 0.2% | 0.9% | 17.5% |  |  |
+
+| | Value | |
+| --- | --- | --- |
+| Actual winner | _pending_ | |
+| Actual podium | _pending_ | |
+
+#### Notes
+
+- **Round 16 is still missing from the data.** Re-ingesting 2026 returned a
+  hollow payload for Kuala Lumpur (22 entries, no status, no points), so `data/v2`
+  and the bundle still stop at round 15. Nothing was rebuilt.
+- **The model again picks against pole.** It ranks HAM (P3) ahead of LEC (P2) and
+  VER (pole). Four drivers hold about 89% of the win probability and none has
+  more than 29%, so there's no clear favourite.
+- **HAD starts P22.** He sits 13th in utility order, but his 39.2% `p_top10`
+  beats everyone from P9 down. Where order and probabilities disagree, trust the probabilities.
+- **Grid is PROVISIONAL** and comes from qualifying. Penalties applied after the
+  session aren't reflected, and HAD's P22 may be one of them.
 
 ### 2026 Round 16 — Bahrain Grand Prix (Kuala Lumpur) — 2026-10-04
 
@@ -103,28 +165,28 @@ Log the numbers; resist reading a trend into them before ~20 races.
 
 | Pred | Driver | Team | Grid | p_win | p_podium | p_top10 | **Actual** | **Δ** |
 | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | HAM | ferrari | 2 | 31.8% | 77.6% | 100.0% |  |  |
-| 2 | VER | red_bull | 1 | 24.0% | 68.9% | >99.9% |  |  |
-| 3 | HAD | red_bull | 3 | 17.8% | 57.2% | >99.9% |  |  |
-| 4 | ANT | mercedes | 4 | 14.9% | 49.7% | 99.9% |  |  |
-| 5 | LEC | ferrari | 5 | 2.8% | 11.3% | 88.8% |  |  |
-| 6 | NOR | mclaren | 6 | 1.9% | 7.8% | 78.6% |  |  |
-| 7 | PIA | mclaren | 7 | 1.3% | 5.4% | 66.7% |  |  |
-| 8 | RUS | mercedes | 8 | 1.1% | 4.4% | 60.1% |  |  |
-| 9 | LAW | racing_bulls | 11 | 0.6% | 2.2% | 36.8% |  |  |
-| 10 | GAS | alpine | 9 | 0.5% | 2.0% | 33.5% |  |  |
-| 11 | BOR | sauber | 10 | 0.5% | 1.8% | 31.1% |  |  |
-| 12 | ALO | aston_martin | 12 | 0.3% | 1.2% | 20.9% |  |  |
-| 13 | SAI | williams | 13 | 0.3% | 1.0% | 18.3% |  |  |
-| 14 | LIN | racing_bulls | 16 | 0.3% | 1.3% | 20.1% |  |  |
-| 15 | ALB | williams | 20 | 0.3% | 1.0% | 18.6% |  |  |
-| 16 | STR | aston_martin | 14 | 0.3% | 1.1% | 18.2% |  |  |
-| 17 | BOT | cadillac | 21 | 0.3% | 1.0% | 18.3% |  |  |
-| 18 | COL | alpine | 15 | 0.3% | 1.0% | 18.1% |  |  |
-| 19 | PER | cadillac | 22 | 0.3% | 1.1% | 18.5% |  |  |
-| 20 | HUL | sauber | 17 | 0.3% | 1.0% | 17.8% |  |  |
-| 21 | BEA | haas | 18 | 0.3% | 0.9% | 17.8% |  |  |
-| 22 | OCO | haas | 19 | 0.3% | 1.0% | 17.9% |  |  |
+| 1 | HAM | ferrari | 2 | 31.8% | 77.6% | 100.0% | 3 | +2 |
+| 2 | VER | red_bull | 1 | 24.0% | 68.9% | >99.9% | 1 | -1 |
+| 3 | HAD | red_bull | 3 | 17.8% | 57.2% | >99.9% | 5 | +2 |
+| 4 | ANT | mercedes | 4 | 14.9% | 49.7% | 99.9% | 2 | -2 |
+| 5 | LEC | ferrari | 5 | 2.8% | 11.3% | 88.8% | 4 | -1 |
+| 6 | NOR | mclaren | 6 | 1.9% | 7.8% | 78.6% | 9 | +3 |
+| 7 | PIA | mclaren | 7 | 1.3% | 5.4% | 66.7% | 6 | -1 |
+| 8 | RUS | mercedes | 8 | 1.1% | 4.4% | 60.1% | 20 | +12 |
+| 9 | LAW | racing_bulls | 11 | 0.6% | 2.2% | 36.8% | 7 | -2 |
+| 10 | GAS | alpine | 9 | 0.5% | 2.0% | 33.5% | 16 | +6 |
+| 11 | BOR | sauber | 10 | 0.5% | 1.8% | 31.1% | 18 | +7 |
+| 12 | ALO | aston_martin | 12 | 0.3% | 1.2% | 20.9% | 8 | -4 |
+| 13 | SAI | williams | 13 | 0.3% | 1.0% | 18.3% | 17 | +4 |
+| 14 | LIN | racing_bulls | 16 | 0.3% | 1.3% | 20.1% | 10 | -4 |
+| 15 | ALB | williams | 20 | 0.3% | 1.0% | 18.6% | DNF | — |
+| 16 | STR | aston_martin | 14 | 0.3% | 1.1% | 18.2% | 12 | -4 |
+| 17 | BOT | cadillac | 21 | 0.3% | 1.0% | 18.3% | DNF | — |
+| 18 | COL | alpine | 15 | 0.3% | 1.0% | 18.1% | 13 | -5 |
+| 19 | PER | cadillac | 22 | 0.3% | 1.1% | 18.5% | 19 | 0 |
+| 20 | HUL | sauber | 17 | 0.3% | 1.0% | 17.8% | 11 | -9 |
+| 21 | BEA | haas | 18 | 0.3% | 0.9% | 17.8% | 14 | -7 |
+| 22 | OCO | haas | 19 | 0.3% | 1.0% | 17.9% | 15 | -7 |
 
 _Fill **Actual** with the classified finishing position (`DNF` if retired) and **Δ** with actual − predicted._
 
@@ -132,12 +194,12 @@ _Fill **Actual** with the classified finishing position (`DNF` if retired) and *
 
 | Metric | Model | Grid baseline |
 | --- | --- | --- |
-| Winner hit | _pending_ | _pending_ |
-| Podium overlap | _ / 3 | _ / 3 |
-| Top-10 overlap | _ / 10 | _ / 10 |
+| Winner hit | no (HAM) | yes (VER) |
+| Podium overlap | 2 / 3 | 2 / 3 |
+| Top-10 overlap | 8 / 10 | 7 / 10 |
 | Favourite's p_win | 31.8% (HAM) | — |
-| Actual winner | _pending_ | |
-| Actual podium | _pending_ | |
+| Actual winner | VER (model p_win 24.0%) | |
+| Actual podium | VER · ANT · HAM | |
 
 #### Notes
 
@@ -155,6 +217,18 @@ _Fill **Actual** with the classified finishing position (`DNF` if retired) and *
 - **The model again disagrees with pole.** It puts HAM (P2 on the grid) ahead of
   VER (pole). The top four hold about 89% of the win probability between them,
   and no one is above a third, so there is no strong favourite.
+- **Published grid differed from the provisional one, including the top 3**
+  (scored 2026-10-19): HAD P3→P8, ANT P4→P3, LEC P5→P4, NOR P6→P5, PIA P7→P6,
+  RUS P8→P7, COL P15→P21, LIN P16→P22, HUL P17→P15, BEA P18→P16, OCO P19→P17,
+  ALB P20→P18, BOT P21→P19, PER P22→P20. Unlike rounds 14 and 15, this reaches
+  the podium places: on the published grid the grid baseline's podium would
+  have been VER · HAM · ANT, 3/3 rather than 2/3. Following the rule used so
+  far, the grid baseline is scored against the provisional grid the forecast
+  used. The model's podium pick of HAD came from that same provisional P3.
+- **Result ingested late.** Earlier attempts got empty results (2026-10-04)
+  and then a hollow payload (2026-10-11). Re-ingested 2026-10-19: 22
+  classified entries, points awarded, and rounds 1-15 unchanged from the
+  stored data.
 
 ---
 
@@ -369,5 +443,8 @@ Copy this block for each new race.
       One line fixes it: `!reports/forecasts/` plus `!reports/forecasts/*.json`.
 - [x] **Score round 14.** Scored 2026-10-04.
 - [x] **Score round 15.** Scored 2026-10-04 (after-lights-out; see its entry).
-- [ ] **Score round 16** once the Kuala Lumpur result is published, keeping the
-      after-lights-out caveat attached to it.
+- [x] **Score round 16.** Scored 2026-10-19 (after-lights-out; see its entry).
+- [ ] **Score round 17** once FastF1 serves the Singapore race session. On
+      2026-10-19 it still failed ("No data for this session"). This is the
+      first forecast frozen before lights-out, so it is the first genuinely
+      prospective result.

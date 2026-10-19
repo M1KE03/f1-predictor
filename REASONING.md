@@ -1917,4 +1917,122 @@ unchanged. Generated evidence is retained under
 
 ---
 
+## [018] Audit of the headline comparisons: grid baseline, winner significance, recent seasons
+
+**Date:** 2026-10-19 - **Files:** `README.md`, `REASONING.md` (documentation
+only; no code or artifact changed)
+
+Three questions about the README's headline claims, all answered from
+`reports/backtest_final/predictions.parquet`, the run behind the 1.1469 vs
+1.6569 result. Nothing was refitted; the 127 races were re-sliced and
+re-tested.
+
+### 1. The probabilistic grid baseline is a fair comparator
+
+`backtest.py:379-391` builds it as Plackett-Luce over utility
+`-grid_position`, with one temperature fitted per fold on the validation
+season by winner log loss. The ranker goes through the identical procedure, so
+the comparison is like for like. Fitted grid temperatures: 1.935, 1.935,
+2.371, 1.579, 1.935, 0.95 for 2021-2026.
+
+One parameter forces every extra grid place to cut the win probability by the
+same factor, which misprices the front:
+
+| grid slot | win rate | mean p_win_grid |
+| ---: | ---: | ---: |
+| 1 | 0.559 | 0.431 |
+| 2 | 0.213 | 0.238 |
+| 3 | 0.094 | 0.136 |
+| 4 | 0.039 | 0.079 |
+| 5 | 0.008 | 0.046 |
+
+Alternative grid baselines (empirical win rate per slot, additive smoothing
+0.5):
+
+| grid baseline | winner log loss |
+| --- | ---: |
+| slot rates from training seasons only | 2.2818 |
+| slot rates from training + validation seasons | 2.0403 |
+| one-parameter softmax (reported) | 1.6569 |
+| slot rates from the test races themselves (unfair upper bound) | 1.4250 |
+| ranker | 1.1469 |
+
+The frequency tables do worse out of sample because winners from P14, P17 and
+P19 land in slots with almost no historical wins. The upper-bound row is
+the one that matters: even a grid baseline that knows the test-period rates
+loses to the ranker. The gap is not an artifact of the baseline's shape.
+
+### 2. Winner accuracy: paired, not significant
+
+`gates.paired_difference` takes per-race differences in the 0/1 winner hit,
+resamples races with replacement 10,000 times (seed 20260911), and reports
+the 2.5/97.5 percentiles. No p-value was ever computed. Added here:
+
+| vs grid | diff | 95% CI | only candidate / only grid | McNemar exact p | season-cluster CI |
+| --- | ---: | --- | ---: | ---: | --- |
+| ranker | +0.0472 | [-0.0315, +0.1260] | 17 / 11 | 0.345 | [-0.0448, +0.1525] |
+| blend | +0.0394 | [-0.0394, +0.1181] | 15 / 10 | 0.424 | [-0.0534, +0.1520] |
+| top10_classifier | -0.0236 | [-0.0630, +0.0079] | 1 / 4 | 0.375 | [-0.0526, +0.0000] |
+
+Ranker contingency: both right 60, both wrong 39. With only 28 discordant
+races the test has little power. The README's wording that `src.gates` fails
+"because the thresholds are not met" omitted that the winner interval also
+spans zero; both now appear.
+
+### 3. The probability advantage is concentrated in 2021-2023
+
+| window | races | diff | 95% CI | share of races ranker better | Wilcoxon p |
+| --- | ---: | ---: | --- | ---: | ---: |
+| 2021-2026 | 127 | -0.5099 | [-0.8659, -0.2330] | 0.70 | <0.0001 |
+| 2022-2026 | 105 | -0.5540 | [-0.9891, -0.2289] | 0.69 | |
+| 2024-2026 | 61 | -0.3683 | [-1.0361, +0.0971] | 0.59 | 0.160 |
+| 2021 | 22 | -0.2995 | [-0.6999, -0.0039] | 0.77 | |
+| 2022 | 22 | -0.6059 | [-1.3112, -0.0361] | 0.73 | |
+| 2023 | 22 | -1.0169 | [-1.3992, -0.7036] | 0.91 | |
+| 2024 | 24 | -0.1196 | [-0.8176, +0.4786] | 0.50 | 0.726 |
+| 2025 | 24 | -0.1346 | [-0.3141, +0.0398] | 0.58 | 0.178 |
+| 2026 | 13 | -1.2590 | [-3.9116, +0.2200] | 0.77 | 0.127 |
+
+The per-race differences are heavy-tailed (median -0.278). The three largest
+gains are all deep-grid winners the grid baseline priced near zero:
+
+| race | winner, grid | p_grid | p_ranker | diff |
+| --- | --- | ---: | ---: | ---: |
+| 2026 R13 | ANT, 19 | ~4e-9 | 0.0561 | -16.49 |
+| 2022 R14 | VER, 14 | 0.00049 | 0.2558 | -6.25 |
+| 2024 R21 | VER, 17 | 0.00002 | 0.0065 | -5.85 |
+
+2026 R13 alone is worth -0.13 on the 127-race mean, made larger by the 2026
+fold's grid temperature (0.95, about half the others). Dropping it:
+
+| window | races | diff | 95% CI |
+| --- | ---: | ---: | --- |
+| all | 126 | -0.3831 | [-0.5898, -0.1899] |
+| 2024-2026 | 60 | -0.0997 | [-0.3837, +0.1599] |
+| 2026 | 12 | +0.0101 | [-0.2236, +0.3218] |
+
+### What this changes
+
+- The pooled probability claim stands: it survives the outlier, a rank-based
+  test, and a stronger grid baseline.
+- It does not describe the recent seasons. Across 2024-2026 there is no
+  resolved advantage, and without one race the point estimate is near zero.
+  This is the reverse of the narrow-window lesson in [009]/[010]: there the
+  narrow window gave a false negative on ordering; here the narrow windows are
+  the most recent and the closest to live use, and the evidence there is weak.
+- Not yet addressed: whether the grid temperature should be bounded or
+  pooled across folds so one fold's fit cannot make the baseline near-certain
+  about the front of the grid. That would shrink the deep-grid penalties in
+  both directions.
+
+### Reproduction
+
+Per-race rows from `gates.probability_rows` and `gates.score_predictions` on
+`reports/backtest_final/predictions.parquet`; intervals from
+`gates.paired_difference` (defaults); McNemar via `scipy.stats.binomtest` on
+the discordant counts; Wilcoxon via `scipy.stats.wilcoxon`; season-cluster
+intervals resample the six test seasons with replacement, 10,000 draws.
+
+---
+
 <!-- Append new entries above this line, newest last. -->

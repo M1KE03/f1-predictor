@@ -13,17 +13,22 @@ grid with 95% intervals from 10,000 race-level bootstrap resamples:
 
 - **Order: not distinguishable from the grid at the FIX_PLAN §8 margin.** The
   champion ranker's winner accuracy is 0.6063 against the grid's 0.5591, a
-  difference of +0.0472 [−0.0315, +0.1260]. `src.gates` still exits 1 because
-  the winner and podium thresholds (+0.05 and +0.03) are not met. Ordering
+  difference of +0.0472 [−0.0315, +0.1260]. The two disagree in only 28 races
+  (17 picked right only by the ranker, 11 only by the grid; exact McNemar
+  p = 0.35). `src.gates` still exits 1 on both winner checks: +0.0472 is below
+  the +0.05 threshold and the interval spans zero. The podium threshold
+  (+0.03) is not met either. Ordering
   quality over finishers does resolve: Spearman +0.0304 [+0.0086, +0.0523].
 - **Probabilities: all four probability gates pass.** A Plackett-Luce layer
   over the ranker scores, temperature-calibrated per fold, gives winner log
-  loss **1.1469 against the grid baseline's 1.6568**, paired −0.5099 [−0.8659,
+  loss **1.1469 against the grid baseline's 1.6569**, paired −0.5099 [−0.8659,
   −0.2330]. Podium Brier is 0.07083 vs 0.07108 (the gate allows a worsening of
   up to 0.01), there are 0 coherence problems over 127 races, and log loss
   beats the uniform floor (1.1469 vs 3.0047). Calibration is mildly
   conservative: the favourite's mean `p_win` is 0.5619 against an actual win
-  rate of 0.6063.
+  rate of 0.6063. The advantage is not even over time: it resolves in each of
+  2021, 2022 and 2023, but not in 2024, 2025 or 2026, nor in 2024–2026 pooled
+  (61 races, −0.3683 [−1.0361, +0.0971]). See [By season](#by-season).
 
 Read the probabilities as the useful output and the order as roughly
 grid-equivalent. `predict.py` prints that distinction on every forecast.
@@ -59,6 +64,15 @@ Paired against the grid, winner accuracy:
 | Blend | +0.0394 | [−0.0394, +0.1181] | no |
 | Top-10 classifier | −0.0236 | [−0.0630, +0.0079] | no |
 
+Each race scores 1 if the method's top pick won, so the comparison is paired
+by race. Exact McNemar tests on the races where a method and the grid disagree
+agree with the intervals: ranker p = 0.345 (17 vs 11), blend p = 0.424
+(15 vs 10), top-10 classifier p = 0.375 (1 vs 4). The intervals resample races
+independently. Resampling whole seasons instead, since races in a season share
+cars and form, widens the ranker's to [−0.0448, +0.1525]. An interval that
+spans zero is not evidence of no gain: gains of up to about +12.6 points are
+still consistent with these 127 races.
+
 What *does* resolve is ordering quality: Spearman over finishers is better for
 all three (ranker +0.0304 [+0.0086, +0.0523]), and the blend also resolves on
 Spearman over all rows (+0.0265 [+0.0105, +0.0424]).
@@ -74,13 +88,50 @@ temperature-calibrated per fold. All four probability gates pass:
 
 | Gate | Result |
 | --- | --- |
-| Winner log loss beats grid | 1.1469 vs 1.6568, paired −0.5099 [−0.8659, −0.2330] — **resolves** |
+| Winner log loss beats grid | 1.1469 vs 1.6569, paired −0.5099 [−0.8659, −0.2330] — **resolves** |
 | Podium Brier worsens ≤ 0.01 | 0.07083 vs 0.07108 |
 | Probabilities coherent | 0 problems over 127 races |
 | Beats the uniform floor | 1.1469 vs 3.0047 |
 
 Calibration is mildly conservative: the favourite's mean `p_win` is 0.5619
 against an actual win rate of 0.6063.
+
+### By season
+
+The grid baseline is a one-parameter softmax over `−grid_position`. Its
+temperature is fitted on each fold's validation season, as the ranker's is.
+That shape makes every extra grid place cut the win probability by the same
+factor, which underprices pole (mean `p_win` 0.431 against a win rate of
+0.559). A better-shaped grid baseline does not close the gap. Empirical win
+rates by grid slot score 2.04 out of sample. Even rates measured on the test
+races themselves, an unfair upper bound, only reach 1.425.
+
+The pooled advantage is not spread evenly. Paired winner log loss, ranker minus
+grid (negative favours the ranker):
+
+| Window | Races | Ranker | Grid | Difference | 95% interval | Resolves? |
+| --- | ---: | ---: | ---: | ---: | --- | --- |
+| 2021–2026 | 127 | 1.1469 | 1.6569 | −0.5099 | [−0.8659, −0.2330] | yes |
+| 2022–2026 | 105 | 1.0977 | 1.6517 | −0.5540 | [−0.9891, −0.2289] | yes |
+| 2024–2026 | 61 | 1.2344 | 1.6027 | −0.3683 | [−1.0361, +0.0971] | no |
+| 2021 | 22 | 1.3820 | 1.6816 | −0.2995 | [−0.6999, −0.0039] | yes |
+| 2022 | 22 | 1.2874 | 1.8933 | −0.6059 | [−1.3112, −0.0361] | yes |
+| 2023 | 22 | 0.5289 | 1.5458 | −1.0169 | [−1.3992, −0.7036] | yes |
+| 2024 | 24 | 1.6135 | 1.7331 | −0.1196 | [−0.8176, +0.4786] | no |
+| 2025 | 24 | 1.0527 | 1.1873 | −0.1346 | [−0.3141, +0.0398] | no |
+| 2026 | 13 | 0.8701 | 2.1291 | −1.2590 | [−3.9116, +0.2200] | no |
+
+Two things drive the pooled number. 2023, Verstappen's dominant season, gives
+the largest resolved gain. And a few winners from deep on the grid cost the
+grid baseline heavily. The largest is 2026 round 13, which Antonelli won from
+19th. The grid baseline's 2026 temperature (0.95) is about half the other
+folds', and it gave him effectively zero against the ranker's 0.056: 16.5
+nats on one race. Without that race the pooled result still resolves
+(−0.3831 [−0.5898, −0.1899]; Wilcoxon signed-rank p < 0.0001 over all 127),
+but 2024–2026 falls to −0.0997 [−0.3837, +0.1599] and 2026 alone to +0.0101
+[−0.2236, +0.3218]. **Over the three most recent seasons there is no resolved
+probability advantage over the grid.** Detail in
+[`REASONING.md`](REASONING.md) [018].
 
 `models/champion` is the ranker (38 features, 65 iterations, temperature 0.344,
 blend alpha 0.3) fitted on all 186 races through 2026-09-06, with the data hash,

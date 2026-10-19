@@ -6,17 +6,77 @@
 | :---: | --- | --- | :---: | :---: | :---: | :---: | :---: |
 | 14 | Spanish GP (Madrid) ⚠️ | 13 Sep | ANT | ANT | ✅ / ❌ | 3/3 · 3/3 | 9/10 · 9/10 |
 | 15 | Azerbaijan GP (Baku) ⚠️ | 26 Sep | LEC | RUS | ❌ / ✅ | 1/3 · 1/3 | 7/10 · 6/10 |
-| 16 | Bahrain GP (Kuala Lumpur) ⚠️ | 04 Oct | HAM | | | | |
-| 17 | Singapore GP (Marina Bay) | 11 Oct | | | | | |
+| 16 | Bahrain GP (Kuala Lumpur) ⚠️ | 04 Oct | HAM | VER | ❌ / ✅ | 2/3 · 2/3 | 8/10 · 7/10 |
+| 17 | Singapore GP (Marina Bay) | 11 Oct | HAM | | | | |
 | 18 | United States GP (Austin) | 25 Oct | | | | | |
 | 19 | Mexico City GP (Mexico City) | 01 Nov | | | | | |
 | 20 | São Paulo GP (São Paulo) | 08 Nov | | | | | |
 | 21 | Las Vegas GP (Las Vegas) | 21 Nov | | | | | |
 | 22 | Qatar GP (Lusail) | 29 Nov | | | | | |
 | 23 | Abu Dhabi GP (Yas Marina) | 06 Dec | | | | | |
-| | **Total** | | | | **1/2 · 1/2** | **4/6 · 4/6** | **16/20 · 15/20** |
+| | **Total** | | | | **1/3 · 2/3** | **6/9 · 6/9** | **24/30 · 22/30** |
 
 ⚠️ forecast made after race start
+
+---
+
+## Round 17 · Singapore Grand Prix (Marina Bay)
+
+11 Oct 2026 · grid provisional
+
+### Prediction
+
+| | Driver | Team | Grid | Win | Podium | Top 10 |
+| :---: | --- | --- | :---: | ---: | ---: | ---: |
+| 🥇 | **HAM** | Ferrari | P3 | 28.7% | 74.4% | 100% |
+| 🥈 | **LEC** | Ferrari | P2 | 24.9% | 69.8% | 100% |
+| 🥉 | **VER** | Red Bull | P1 | 21.4% | 64.7% | >99.9% |
+| 4 | ANT | Mercedes | P4 | 14.3% | 48.0% | 99.9% |
+| 5 | NOR | McLaren | P5 | 2.6% | 10.4% | 87.5% |
+| 6 | PIA | McLaren | P7 | 1.3% | 5.1% | 66.3% |
+| 7 | RUS | Mercedes | P6 | 1.2% | 5.0% | 64.3% |
+| 8 | GAS | Alpine | P8 | 0.9% | 3.7% | 54.3% |
+| 9 | LIN | Racing Bulls | P10 | 0.6% | 2.2% | 39.1% |
+| 10 | LAW | Racing Bulls | P9 | 0.5% | 2.2% | 36.4% |
+| 11 | HUL | Audi | P11 | 0.4% | 1.8% | 30.6% |
+| 12 | BEA | Haas | P12 | 0.3% | 1.2% | 20.7% |
+| 13 | HAD | Red Bull | P22 | 0.6% | 2.5% | 39.2% |
+| 14 | SAI | Williams | P14 | 0.2% | 1.1% | 18.3% |
+| 15 | ALB | Williams | P18 | 0.2% | 0.9% | 18.1% |
+| 16 | BOR | Audi | P15 | 0.2% | 0.9% | 18.1% |
+| 17 | OCO | Haas | P13 | 0.2% | 1.0% | 17.6% |
+| 18 | PER | Cadillac | P20 | 0.2% | 1.0% | 18.5% |
+| 19 | BOT | Cadillac | P21 | 0.2% | 0.9% | 18.2% |
+| 20 | COL | Alpine | P16 | 0.2% | 1.1% | 17.6% |
+| 21 | ALO | Aston Martin | P17 | 0.2% | 1.0% | 17.6% |
+| 22 | STR | Aston Martin | P19 | 0.2% | 0.9% | 17.5% |
+
+### Result
+
+| Pos | Driver | Team | Grid | Predicted | Δ |
+| :---: | --- | --- | :---: | :---: | :---: |
+| 1 | | | | | |
+| 2 | | | | | |
+| 3 | | | | | |
+| 4 | | | | | |
+| 5 | | | | | |
+| 6 | | | | | |
+| 7 | | | | | |
+| 8 | | | | | |
+| 9 | | | | | |
+| 10 | | | | | |
+| 11 | | | | | |
+| 12 | | | | | |
+| 13 | | | | | |
+| 14 | | | | | |
+| 15 | | | | | |
+| 16 | | | | | |
+| 17 | | | | | |
+| 18 | | | | | |
+| 19 | | | | | |
+| 20 | | | | | |
+| 21 | | | | | |
+| 22 | | | | | |
 
 ---
 
@@ -55,28 +115,28 @@
 
 | Pos | Driver | Team | Grid | Predicted | Δ |
 | :---: | --- | --- | :---: | :---: | :---: |
-| 1 | | | | | |
-| 2 | | | | | |
-| 3 | | | | | |
-| 4 | | | | | |
-| 5 | | | | | |
-| 6 | | | | | |
-| 7 | | | | | |
-| 8 | | | | | |
-| 9 | | | | | |
-| 10 | | | | | |
-| 11 | | | | | |
-| 12 | | | | | |
-| 13 | | | | | |
-| 14 | | | | | |
-| 15 | | | | | |
-| 16 | | | | | |
-| 17 | | | | | |
-| 18 | | | | | |
-| 19 | | | | | |
-| 20 | | | | | |
-| 21 | | | | | |
-| 22 | | | | | |
+| 1 | VER | Red Bull | P1 | P2 | ▲1 |
+| 2 | ANT | Mercedes | P3 | P4 | ▲2 |
+| 3 | HAM | Ferrari | P2 | P1 | ▼2 |
+| 4 | LEC | Ferrari | P4 | P5 | ▲1 |
+| 5 | HAD | Red Bull | P8 | P3 | ▼2 |
+| 6 | PIA | McLaren | P6 | P7 | ▲1 |
+| 7 | LAW | Racing Bulls | P11 | P9 | ▲2 |
+| 8 | ALO | Aston Martin | P12 | P12 | ▲4 |
+| 9 | NOR | McLaren | P5 | P6 | ▼3 |
+| 10 | LIN | Racing Bulls | P22 | P14 | ▲4 |
+| 11 | HUL | Audi | P15 | P20 | ▲9 |
+| 12 | STR | Aston Martin | P14 | P16 | ▲4 |
+| 13 | COL | Alpine | P21 | P18 | ▲5 |
+| 14 | BEA | Haas | P16 | P21 | ▲7 |
+| 15 | OCO | Haas | P17 | P22 | ▲7 |
+| 16 | GAS | Alpine | P9 | P10 | ▼6 |
+| 17 | SAI | Williams | P13 | P13 | ▼4 |
+| 18 | BOR | Audi | P10 | P11 | ▼7 |
+| 19 | PER | Cadillac | P20 | P19 | = |
+| 20 | RUS | Mercedes | P7 | P8 | ▼12 |
+| DNF | ALB | Williams | P18 | P15 |  |
+| DNF | BOT | Cadillac | P19 | P17 |  |
 
 ---
 
